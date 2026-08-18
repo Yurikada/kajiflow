@@ -574,6 +574,79 @@ button:disabled {
   transform: translateX(-50%) translateY(0);
 }
 
+/* ---------- アプリ内確認ダイアログ（appConfirm） ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 30;
+}
+
+.modal-sheet {
+  width: 100%;
+  max-width: 560px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px 20px 0 0;
+  padding: 20px 20px calc(20px + env(safe-area-inset-bottom, 0px));
+  box-shadow: var(--shadow);
+}
+
+.modal-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.modal-message {
+  font-size: 0.9rem;
+  color: var(--text-sub);
+  margin: 0 0 12px;
+}
+
+.modal-note {
+  width: 100%;
+  font-family: inherit;
+  font-size: 1rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.modal-actions button {
+  flex: 1;
+  padding: 12px 0;
+  font-weight: 600;
+}
+
+.modal-cancel {
+  background: var(--chip-bg);
+  color: var(--text);
+}
+
+.modal-ok {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+.modal-ok.danger {
+  background: var(--danger);
+  color: #fff;
+}
+
 /* ---------- 下部タブ ---------- */
 
 .tab-bar {

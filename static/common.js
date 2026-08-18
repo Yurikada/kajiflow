@@ -54,6 +54,42 @@ function escapeHtml(s) {
     .replaceAll("'", "&#39;");
 }
 
+/**
+ * アプリ内確認ダイアログ。window.confirm / prompt の代替。
+ * ネイティブダイアログは Android のインストール済み PWA（standalone）で
+ * 無効化され即 false を返すため、必ずこちらを使う。
+ * 戻り値: {ok: boolean, note: string|null}（showNote=false のとき note は null）
+ */
+function appConfirm({ title, message = "", showNote = false, confirmLabel = "確定", danger = false }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-sheet" role="dialog" aria-modal="true">
+        <p class="modal-title">${escapeHtml(title)}</p>
+        ${message ? `<p class="modal-message">${escapeHtml(message)}</p>` : ""}
+        ${showNote ? '<input type="text" class="modal-note" placeholder="完了メモ（任意）">' : ""}
+        <div class="modal-actions">
+          <button type="button" class="modal-cancel">キャンセル</button>
+          <button type="button" class="modal-ok${danger ? " danger" : ""}">${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>`;
+    const close = (result) => {
+      overlay.remove();
+      resolve(result);
+    };
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close({ ok: false, note: null });
+    });
+    overlay.querySelector(".modal-cancel").addEventListener("click", () => close({ ok: false, note: null }));
+    overlay.querySelector(".modal-ok").addEventListener("click", () => {
+      const noteEl = overlay.querySelector(".modal-note");
+      close({ ok: true, note: noteEl ? noteEl.value.trim() || null : null });
+    });
+    document.body.appendChild(overlay);
+  });
+}
+
 const WEEKDAY_LABELS = ["月", "火", "水", "木", "金", "土", "日"];
 
 /** '0,3' 形式 → '月・木' 表示 */

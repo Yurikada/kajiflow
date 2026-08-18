@@ -44,7 +44,13 @@ async function loadTasks() {
     });
     row.querySelector('[data-act="edit"]').addEventListener("click", () => startEdit(task));
     row.querySelector('[data-act="delete"]').addEventListener("click", async () => {
-      if (!confirm(`「${task.name}」を削除しますか？（実績も消えます）`)) return;
+      const { ok } = await appConfirm({
+        title: `「${task.name}」を削除しますか？`,
+        message: "完了実績も一緒に消えます。",
+        confirmLabel: "削除する",
+        danger: true,
+      });
+      if (!ok) return;
       try {
         await api(`/api/tasks/${task.id}`, { method: "DELETE" });
         showToast("削除しました");
@@ -215,7 +221,12 @@ $("settings-form").addEventListener("submit", async (ev) => {
 // ---------------------------------------------------------------- 再生成
 
 $("btn-regenerate").addEventListener("click", async () => {
-  if (!confirm("今日のプランを作り直しますか？")) return;
+  const { ok } = await appConfirm({
+    title: "今日のプランを作り直しますか？",
+    message: "タスクの追加・変更を今日の分にすぐ反映します。",
+    confirmLabel: "作り直す",
+  });
+  if (!ok) return;
   try {
     const res = await api("/api/plan/regenerate", { method: "POST" });
     showToast(`作り直しました（今日 ${res.total_count}件）`);

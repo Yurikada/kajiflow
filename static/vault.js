@@ -99,13 +99,17 @@ async function classify(uid, classification) {
 }
 
 async function completeTask(task) {
-  if (!confirm(`「${task.title}」を完了して Vault に書き戻しますか？`)) return;
-  const note = prompt("完了メモ（任意・空欄でそのまま完了）", "");
-  if (note === null) return; // キャンセル
+  const { ok, note } = await appConfirm({
+    title: `「${task.title}」を完了しますか？`,
+    message: "Vault のタスク正本に完了として書き戻します。",
+    showNote: true,
+    confirmLabel: "完了する",
+  });
+  if (!ok) return;
   try {
     await vaultApi(`/api/vault/tasks/${encodeURIComponent(task.uid)}/complete`, {
       method: "POST",
-      body: { note: note.trim() || null },
+      body: { note },
     });
     showToast("Vault に完了を書き戻しました");
     await loadTasks();
