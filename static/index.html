@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f7d5d" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1e242e" media="(prefers-color-scheme: dark)">
+  <title>KajiFlow</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%B9%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <main>
+    <div class="now-wrap">
+      <div class="progress" id="progress"></div>
+
+      <section class="now-card" id="card" hidden>
+        <h2 class="task-name" id="task-name"></h2>
+        <div class="task-meta">
+          <span class="chip" id="task-category"></span>
+          <span class="chip" id="task-minutes"></span>
+        </div>
+      </section>
+
+      <section class="now-card empty-card" id="empty-card" hidden>
+        <span class="empty-emoji" id="empty-emoji"></span>
+        <p class="empty-text" id="empty-text"></p>
+      </section>
+
+      <div class="actions" id="actions" hidden>
+        <button class="btn-done" id="btn-done">完了</button>
+        <button class="btn-skip" id="btn-skip">スキップ</button>
+      </div>
+    </div>
+  </main>
+
+  <nav class="tab-bar">
+    <a href="/" class="active"><span class="tab-icon">🏠</span>いま</a>
+    <a href="/today.html"><span class="tab-icon">📋</span>今日</a>
+    <a href="/manage.html"><span class="tab-icon">⚙️</span>管理</a>
+  </nav>
+
+  <script src="/common.js"></script>
+  <script src="/index.js"></script>
+</body>
+</html>

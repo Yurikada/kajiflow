@@ -1,0 +1,58 @@
+"""家事テンプレ初期データ。
+
+テンプレ定義のみを持ち、初期 DB への自動投入はしない
+（manage 画面 / POST /api/templates/apply から選んで追加する）。
+"""
+
+from __future__ import annotations
+
+TEMPLATES: list[dict] = [
+    {"name": "キッチンリセット", "category": "キッチン", "est_minutes": 10,
+     "schedule_type": "interval", "interval_days": 1, "weekdays": None,
+     "notes": "洗い物・シンク周りを寝る前にリセット"},
+    {"name": "洗濯", "category": "洗濯", "est_minutes": 20,
+     "schedule_type": "interval", "interval_days": 2, "weekdays": None,
+     "notes": ""},
+    {"name": "掃除機", "category": "リビング", "est_minutes": 15,
+     "schedule_type": "interval", "interval_days": 3, "weekdays": None,
+     "notes": ""},
+    {"name": "風呂掃除", "category": "水回り", "est_minutes": 10,
+     "schedule_type": "interval", "interval_days": 2, "weekdays": None,
+     "notes": ""},
+    {"name": "トイレ掃除", "category": "水回り", "est_minutes": 10,
+     "schedule_type": "interval", "interval_days": 4, "weekdays": None,
+     "notes": ""},
+    {"name": "洗面台掃除", "category": "水回り", "est_minutes": 5,
+     "schedule_type": "interval", "interval_days": 4, "weekdays": None,
+     "notes": ""},
+    {"name": "排水口掃除", "category": "水回り", "est_minutes": 10,
+     "schedule_type": "interval", "interval_days": 7, "weekdays": None,
+     "notes": "キッチン・風呂の排水口"},
+    {"name": "床拭き", "category": "リビング", "est_minutes": 20,
+     "schedule_type": "interval", "interval_days": 7, "weekdays": None,
+     "notes": ""},
+    {"name": "シーツ交換", "category": "その他", "est_minutes": 15,
+     "schedule_type": "interval", "interval_days": 14, "weekdays": None,
+     "notes": ""},
+    {"name": "冷蔵庫整理", "category": "キッチン", "est_minutes": 15,
+     "schedule_type": "interval", "interval_days": 30, "weekdays": None,
+     "notes": "賞味期限チェックと庫内拭き"},
+    {"name": "レンジ・コンロ掃除", "category": "キッチン", "est_minutes": 15,
+     "schedule_type": "interval", "interval_days": 14, "weekdays": None,
+     "notes": ""},
+    {"name": "玄関掃き", "category": "その他", "est_minutes": 5,
+     "schedule_type": "interval", "interval_days": 7, "weekdays": None,
+     "notes": ""},
+    {"name": "ベランダ掃除", "category": "その他", "est_minutes": 15,
+     "schedule_type": "interval", "interval_days": 30, "weekdays": None,
+     "notes": ""},
+    {"name": "ゴミ出し準備", "category": "その他", "est_minutes": 5,
+     "schedule_type": "weekly", "interval_days": None, "weekdays": "1,4",
+     "notes": "可燃ごみ。収集曜日に合わせて変更してください"},
+    {"name": "資源ごみ準備", "category": "その他", "est_minutes": 5,
+     "schedule_type": "weekly", "interval_days": None, "weekdays": "2",
+     "notes": "収集曜日に合わせて変更してください"},
+    {"name": "観葉植物の水やり", "category": "リビング", "est_minutes": 5,
+     "schedule_type": "interval", "interval_days": 3, "weekdays": None,
+     "notes": ""},
+]

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f7d5d" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1e242e" media="(prefers-color-scheme: dark)">
+  <title>タスク管理 - KajiFlow</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%B9%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <main>
+    <h1>タスク管理</h1>
+
+    <h2>タスク一覧</h2>
+    <div class="card" id="task-list">
+      <p class="empty-note" id="task-empty">タスクがまだありません。下のフォームかテンプレから追加してください。</p>
+    </div>
+
+    <h2 id="form-heading">新規タスク追加</h2>
+    <form class="card" id="task-form">
+      <input type="hidden" id="f-id" value="">
+      <div class="field">
+        <label for="f-name">タスク名</label>
+        <input type="text" id="f-name" required placeholder="例: 風呂掃除">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-category">カテゴリ</label>
+          <select id="f-category">
+            <option>水回り</option>
+            <option>リビング</option>
+            <option>キッチン</option>
+            <option>洗濯</option>
+            <option selected>その他</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-minutes">目安分数</label>
+          <input type="number" id="f-minutes" min="1" max="600" value="10">
+        </div>
+      </div>
+      <div class="field">
+        <label for="f-schedule-type">スケジュール</label>
+        <select id="f-schedule-type">
+          <option value="interval" selected>間隔（◯日ごと）</option>
+          <option value="weekly">曜日固定</option>
+        </select>
+      </div>
+      <div class="field" id="f-interval-wrap">
+        <label for="f-interval">間隔（日）</label>
+        <input type="number" id="f-interval" min="0.5" step="0.5" value="3">
+      </div>
+      <div class="field" id="f-weekdays-wrap" hidden>
+        <label>曜日</label>
+        <div class="weekday-picker" id="f-weekdays">
+          <label><input type="checkbox" value="0">月</label>
+          <label><input type="checkbox" value="1">火</label>
+          <label><input type="checkbox" value="2">水</label>
+          <label><input type="checkbox" value="3">木</label>
+          <label><input type="checkbox" value="4">金</label>
+          <label><input type="checkbox" value="5">土</label>
+          <label><input type="checkbox" value="6">日</label>
+        </div>
+      </div>
+      <div class="check-line" id="f-adaptive-wrap">
+        <input type="checkbox" id="f-adaptive" checked>
+        <label for="f-adaptive">完了実績から間隔を自動調整する</label>
+      </div>
+      <div class="field">
+        <label for="f-notes">メモ</label>
+        <textarea id="f-notes" rows="2" placeholder="任意"></textarea>
+      </div>
+      <div class="btn-line">
+        <button type="submit" class="btn-primary" id="f-submit">追加する</button>
+        <button type="button" class="btn-secondary" id="f-cancel" hidden>キャンセル</button>
+      </div>
+    </form>
+
+    <h2>テンプレからまとめて追加</h2>
+    <div class="card">
+      <div class="template-list" id="template-list"></div>
+      <button class="btn-primary" id="btn-apply-templates">選んだテンプレを追加</button>
+    </div>
+
+    <h2>設定</h2>
+    <form class="card" id="settings-form">
+      <div class="field">
+        <label for="s-budget">1日の予算分数</label>
+        <input type="number" id="s-budget" min="5" max="600" value="30">
+      </div>
+      <div class="field">
+        <label for="s-topic">ntfy トピック（通知を使う場合）</label>
+        <input type="text" id="s-topic" placeholder="例: kajiflow-xxxx" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="s-server">ntfy サーバー</label>
+        <input type="text" id="s-server" placeholder="https://ntfy.sh">
+      </div>
+      <button type="submit" class="btn-primary">設定を保存</button>
+    </form>
+
+    <h2>今日のプラン</h2>
+    <div class="card">
+      <p class="meta" style="margin-top:0; color: var(--text-sub); font-size: 0.85rem;">
+        タスクの追加・変更は通常翌日から反映されます。今日のプランにすぐ反映したい場合はこちら。
+      </p>
+      <button class="btn-primary" id="btn-regenerate">今日のプランを作り直す</button>
+    </div>
+  </main>
+
+  <nav class="tab-bar">
+    <a href="/"><span class="tab-icon">🏠</span>いま</a>
+    <a href="/today.html"><span class="tab-icon">📋</span>今日</a>
+    <a href="/manage.html" class="active"><span class="tab-icon">⚙️</span>管理</a>
+  </nav>
+
+  <script src="/common.js"></script>
+  <script src="/manage.js"></script>
+</body>
+</html>
