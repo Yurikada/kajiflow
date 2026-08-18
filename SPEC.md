@@ -138,6 +138,79 @@ seed はテンプレ定義のみで、初期 DB へ自動投入はしない（ma
 - engine: urgency 計算、EWMA とクランプ、weekly 判定、予算充填（1件目は必ず入る）、プラン決定性（同入力→同出力）、skip が学習に影響しないこと。
 - API: TestClient で next→complete→next の遷移、skip、CRUD、テンプレ適用、regenerate、stats。テストは一時ディレクトリの DB を使う（環境変数 `KAJIFLOW_DB` で DB パスを差し替え可能にする）。
 
+## Vault タスク連携（v2）
+
+Obsidian Vault のタスク正本 `00_Inbox/AIエージェント連携タスク.md` を kajiflow に取り込み、「AIに指示するタスク」「ユーザーが処理するタスク」に分類して表示し、完了を Vault 側へ書き戻す。
+
+### 正本ファイルのフォーマット（実測）
+
+- タスクは `- [ ] タイトル` / `- [x] タイトル`（行頭）で始まり、直後にインデント2の `- キー: 値` メタ行が続く（追加日 / Project / 出所 / 目的 / 完了条件 / 期限 / input など）。
+- `## 見出し` でセクション分けされている。
+- ハンドオフチケットはメタに `id: T...` / `owner:` / `status:` / `handoff-to:` を持つ。**ハンドオフチケットの本文は絶対に手編集しない**（`agent_handoff.py` 経由が唯一の正規手段）。
+- 完了済みタスクには `- 完了: 日付、…` または `- クローズ: 日付、…` のメタ行が付く慣行。
+
+### データモデル追加
+
+```sql
+vault_tasks(
+  uid TEXT PRIMARY KEY,        -- ハンドオフは id（T...）、それ以外は sha1(タイトル正規化)先頭16桁
+  title TEXT NOT NULL,
+  section TEXT DEFAULT '',
+  checked INTEGER NOT NULL DEFAULT 0,      -- Vault 側の [x] 状態（Vault が正）
+  project TEXT DEFAULT '', due TEXT DEFAULT '',
+  purpose TEXT DEFAULT '', done_when TEXT DEFAULT '', source TEXT DEFAULT '',
+  is_handoff INTEGER NOT NULL DEFAULT 0,
+  handoff_owner TEXT DEFAULT '', handoff_status TEXT DEFAULT '',
+  classification TEXT,         -- 'ai' | 'user' | NULL。kajiflow ローカルの状態で、再同期で消えない
+  suggested TEXT,              -- ヒューリスティック提案 'ai' | 'user' | NULL
+  completed_via TEXT,          -- kajiflow から完了書き戻しした日時（未実施は NULL）
+  last_seen_at TEXT NOT NULL,
+  meta_json TEXT NOT NULL DEFAULT '{}'
+)
+```
+
+### 同期ポリシー
+
+- Vault ファイルが正本。同期はファイル読取→パース→upsert。タイトル・メタ・checked は Vault 値で上書きし、classification / suggested（既存値優先）/ completed_via は保持する。
+- 今回の同期で見つからなかった uid は削除せず `last_seen_at` を据え置き、一覧 API の既定では返さない。
+- Vault パスは環境変数 `KAJIFLOW_VAULT`（既定 `%USERPROFILE%\OneDrive\ドキュメント\KnowledgeBase`）、タスクファイル相対パスは `KAJIFLOW_VAULT_TASKFILE`（既定 `00_Inbox/AIエージェント連携タスク.md`）。テストはこの2変数で一時ファイルに差し替える。
+- ファイル不在・読取失敗は 503 と日本語メッセージ。
+
+### 分類ヒューリスティック（suggested）
+
+タイトル+目的の文字列に対する単純キーワード判定。AI 寄り: 実装/調査/分析/作成/集計/スクリーニング/レビュー/スクリプト/PR/デモ。ユーザー寄り: 本人の言葉/所有権/判断/見直す/振り返り/語り/面接/書く。両方または どちらも該当しなければ NULL。あくまで提案で、確定は classification（ユーザーまたは AI が API で設定）。
+
+### 完了書き戻し（安全規則）
+
+1. 書き戻し時にファイルを読み直す（同期時のスナップショットを使わない）。
+2. `- [ ] {タイトル}` の完全一致行を探す。0件または2件以上なら 409 で中断し、**書き込まない**。
+3. 該当行の `[ ]` を `[x]` に置換し、そのタスクのメタブロック末尾に `  - 完了: YYYY-MM-DD、KajiFlowから完了` （note があれば「。{note}」を付加）を1行挿入する。それ以外の行は1バイトも変更しない。
+4. `is_handoff` のタスクは 409 で拒否し、レスポンスに `agent_handoff.py complete {id}` のコマンド文字列を含める（UI はこれをコピー可能に表示）。
+5. 改行コードはファイルの既存状態（LF/CRLF）を検出して維持。エンコーディングは UTF-8。
+6. 成功後は completed_via に日時を記録し、DB の checked も 1 にする。
+
+### API 追加
+
+- `POST /api/vault/sync` → `{open, done, new_count, updated}` 同期実行。
+- `GET /api/vault/tasks` → 未完了のみ（`?include_done=1` で全件）。各要素: uid, title, section, project, due, purpose, done_when, is_handoff, handoff_status, classification, suggested, checked。
+- `PUT /api/vault/tasks/{uid}/classify` body `{"classification": "ai" | "user" | null}`。
+- `POST /api/vault/tasks/{uid}/complete` body `{"note": "..."}`（note 任意）→ 書き戻し。ハンドオフ・曖昧一致は 409。
+- `GET /api/vault/tasks/{uid}/prompt` → text/plain の AI 指示文（タイトル・目的・完了条件・出所・input を整形。AI タスクをそのままエージェントに渡せる形式）。
+
+### UI 追加（vault.html + vault.js）
+
+- 下部タブに4つ目「📥 タスク」を追加（全ページのタブバーを更新）。
+- 画面は3グループ: 「🤖 AIに指示する」「👤 自分でやる」「❓未分類」。未分類で suggested があるものは提案チップ（例: 「提案: AI」タップで採用）を表示。
+- 各タスク: タイトル、Project/期限チップ、分類切替（AI/自分/解除）、完了ボタン（確認ダイアログ→ note 入力任意）。
+- AI グループには「指示文コピー」ボタン（/prompt の内容をクリップボードへ）。
+- ハンドオフチケットは owner/status バッジ付きで表示し、完了ボタンの代わりに `agent_handoff.py` コマンドのコピーを提示。
+- 画面表示時に自動 sync（失敗時はトーストで日本語表示、キャッシュ済み DB 内容を表示）。手動「同期」ボタンも置く。
+- 期限切れ・滞納の色付けはここでもしない（設計原則2）。期限は事実として表示するのみ。
+
+### sw.js
+
+ASSETS に /vault.html, /vault.js を追加し、CACHE_NAME を v4 に上げる。
+
 ## 非スコープ（今回作らない）
 
 - 認証・マルチユーザー・家族共有

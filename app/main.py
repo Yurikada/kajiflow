@@ -15,12 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db as dbmod
-from . import engine, seed
+from . import engine, seed, vault
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -203,6 +203,14 @@ class TaskUpdate(BaseModel):
 
 class TemplatesApply(BaseModel):
     names: list[str]
+
+
+class VaultClassify(BaseModel):
+    classification: str | None = None
+
+
+class VaultComplete(BaseModel):
+    note: str | None = None
 
 
 # ---------------------------------------------------------------- app
@@ -481,6 +489,74 @@ def api_settings_put(payload: dict[str, Any] = Body(...)) -> dict:
             )
         conn.commit()
     return api_settings_get()
+
+
+# -------------------------------------------------- vault 連携
+
+
+@app.post("/api/vault/sync")
+def api_vault_sync() -> dict:
+    with closing(get_conn()) as conn:
+        try:
+            return vault.sync_vault(conn)
+        except vault.VaultReadError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/vault/tasks")
+def api_vault_tasks(include_done: int = Query(default=0)) -> list[dict]:
+    with closing(get_conn()) as conn:
+        return vault.list_tasks(conn, include_done=bool(include_done))
+
+
+@app.put("/api/vault/tasks/{uid}/classify")
+def api_vault_classify(uid: str, payload: VaultClassify) -> dict:
+    if payload.classification not in ("ai", "user", None):
+        raise HTTPException(
+            status_code=422,
+            detail="classification は 'ai' | 'user' | null を指定してください",
+        )
+    with closing(get_conn()) as conn:
+        try:
+            vault.fetch_vault_task(conn, uid)
+        except vault.VaultNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        conn.execute(
+            "UPDATE vault_tasks SET classification = ? WHERE uid = ?",
+            (payload.classification, uid),
+        )
+        conn.commit()
+        task = vault.fetch_vault_task(conn, uid)
+        return {k: task[k] for k in vault.LIST_FIELDS}
+
+
+@app.post("/api/vault/tasks/{uid}/complete")
+def api_vault_complete(uid: str, payload: VaultComplete | None = None) -> dict:
+    note = payload.note if payload else None
+    with closing(get_conn()) as conn:
+        try:
+            return vault.complete_in_vault(conn, uid, note)
+        except vault.VaultNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except vault.VaultConflictError as e:
+            detail: dict = {"message": str(e)}
+            if e.command:
+                detail["command"] = e.command
+            raise HTTPException(status_code=409, detail=detail)
+        except (vault.VaultReadError, vault.VaultWriteError) as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/vault/tasks/{uid}/prompt")
+def api_vault_prompt(uid: str) -> PlainTextResponse:
+    with closing(get_conn()) as conn:
+        try:
+            task = vault.fetch_vault_task(conn, uid)
+        except vault.VaultNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        return PlainTextResponse(
+            vault.build_prompt(task), media_type="text/plain; charset=utf-8"
+        )
 
 
 # -------------------------------------------------- static

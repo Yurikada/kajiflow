@@ -450,6 +450,104 @@ button:disabled {
   flex-shrink: 0;
 }
 
+/* ---------- vault: Vault タスク ---------- */
+
+.vault-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 0 16px;
+}
+
+.vault-toolbar h1 { margin: 0; }
+
+.group-count {
+  color: var(--text-sub);
+  font-weight: 400;
+}
+
+.vault-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.vault-item:first-child { padding-top: 0; }
+.vault-item:last-child { padding-bottom: 0; border-bottom: none; }
+
+.v-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.v-purpose {
+  font-size: 0.8rem;
+  color: var(--text-sub);
+  overflow-wrap: anywhere;
+}
+
+.v-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.badge-handoff {
+  background: color-mix(in srgb, var(--primary) 14%, var(--chip-bg));
+  color: var(--primary);
+}
+
+.v-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.suggest-chip {
+  background: var(--chip-bg);
+  color: var(--primary);
+  border: 1px dashed var(--primary);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  padding: 5px 12px;
+}
+
+.seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.seg button {
+  background: var(--surface);
+  color: var(--text-sub);
+  font-size: 0.8rem;
+  padding: 6px 10px;
+  border-radius: 0;
+  border-left: 1px solid var(--border);
+}
+
+.seg button:first-child { border-left: none; }
+
+.seg button.active {
+  background: var(--primary);
+  color: var(--primary-text);
+  opacity: 1;
+}
+
+.icon-btn.primary {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+
+.empty-note.small {
+  padding: 8px 0;
+  font-size: 0.85rem;
+}
+
 /* トースト */
 .toast {
   position: fixed;

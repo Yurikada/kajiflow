@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f7d5d" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1e242e" media="(prefers-color-scheme: dark)">
+  <title>Vault タスク - KajiFlow</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%B9%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <main>
+    <div class="vault-toolbar">
+      <h1>Vault タスク</h1>
+      <button type="button" class="icon-btn" id="btn-sync">🔄 同期</button>
+    </div>
+
+    <h2>🤖 AIに指示する<span class="group-count" id="count-ai"></span></h2>
+    <div class="card">
+      <div id="list-ai"></div>
+      <p class="empty-note small" id="empty-ai" hidden>AIに指示するタスクはありません</p>
+    </div>
+
+    <h2>👤 自分でやる<span class="group-count" id="count-user"></span></h2>
+    <div class="card">
+      <div id="list-user"></div>
+      <p class="empty-note small" id="empty-user" hidden>自分でやるタスクはありません</p>
+    </div>
+
+    <h2>❓ 未分類<span class="group-count" id="count-none"></span></h2>
+    <div class="card">
+      <div id="list-none"></div>
+      <p class="empty-note small" id="empty-none" hidden>未分類のタスクはありません</p>
+    </div>
+  </main>
+
+  <nav class="tab-bar">
+    <a href="/"><span class="tab-icon">🏠</span>いま</a>
+    <a href="/today.html"><span class="tab-icon">📋</span>今日</a>
+    <a href="/vault.html" class="active"><span class="tab-icon">📥</span>タスク</a>
+    <a href="/manage.html"><span class="tab-icon">⚙️</span>管理</a>
+  </nav>
+
+  <script src="/common.js"></script>
+  <script src="/vault.js"></script>
+</body>
+</html>
