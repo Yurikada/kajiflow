@@ -290,6 +290,15 @@ class GTasksClient:
                 raise GTasksAuthError(CALENDAR_REAUTH_HINT)
             except HttpError as e:
                 status = getattr(getattr(e, "resp", None), "status", None)
+                # 403 でも accessNotConfigured は認証の問題ではなく、
+                # Cloud プロジェクト側で Calendar API が未有効なだけ。
+                # 再認証を案内すると誤誘導になるため区別する。
+                if status == 403 and "accessNotConfigured" in str(e):
+                    raise GTasksApiError(
+                        "Google Calendar API が Cloud プロジェクトで未有効です。"
+                        "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com"
+                        " から有効化してください"
+                    )
                 if status in (401, 403):
                     raise GTasksAuthError(CALENDAR_REAUTH_HINT)
                 raise GTasksApiError(
