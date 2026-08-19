@@ -209,6 +209,34 @@ class TestNextCompleteFlow:
             conn.close()
         assert count == 1  # 記録は1件のみ
 
+    def test_complete_concurrent_requests_record_once(self, client, raw_conn):
+        """同時並行の complete でも記録は1件（BEGIN IMMEDIATE による原子化）。"""
+        import threading
+
+        t1, _t2 = self._setup_two_due_tasks(client, raw_conn)
+        barrier = threading.Barrier(4)
+        results = []
+
+        def hit():
+            barrier.wait()
+            results.append(client.post(f"/api/tasks/{t1['id']}/complete").status_code)
+
+        threads = [threading.Thread(target=hit) for _ in range(4)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        assert all(code == 200 for code in results)
+        conn = raw_conn()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM completions WHERE task_id = ?", (t1["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 1
+
     def test_skip_moves_to_next_without_done_count(self, client, raw_conn):
         t1, t2 = self._setup_two_due_tasks(client, raw_conn)
 

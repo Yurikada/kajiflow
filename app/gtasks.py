@@ -24,7 +24,7 @@ import re
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 from . import vault
@@ -588,14 +588,32 @@ def _sync_chores(
         tid = int(local_id.split(":", 1)[1])
         if statuses.get(tid) is not None:
             continue  # 既に done/skip 記録済み
-        conn.execute(
-            "INSERT INTO completions (task_id, completed_at, action) "
-            "VALUES (?, ?, 'done')",
-            (tid, now_iso),
-        )
-        conn.commit()
+        # statuses はループ前のスナップショットのため、UI の complete と同時実行
+        # されると二重記録になりうる。BEGIN IMMEDIATE で書き込みロックを取り、
+        # 当日記録の有無を確認してから挿入する（_record_action と同じ規則）。
+        day_start = datetime.combine(local_now.date(), time.min, tzinfo=JST).isoformat()
+        day_end = datetime.combine(
+            local_now.date() + timedelta(days=1), time.min, tzinfo=JST
+        ).isoformat()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            dup = conn.execute(
+                "SELECT 1 FROM completions WHERE task_id = ? "
+                "AND completed_at >= ? AND completed_at < ? LIMIT 1",
+                (tid, day_start, day_end),
+            ).fetchone()
+            if dup is None:
+                conn.execute(
+                    "INSERT INTO completions (task_id, completed_at, action) "
+                    "VALUES (?, ?, 'done')",
+                    (tid, now_iso),
+                )
+                result["completed_chores"] += 1
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         statuses[tid] = "done"
-        result["completed_chores"] += 1
 
 
 # ---------------------------------------------------------------- sync_all

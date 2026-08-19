@@ -247,21 +247,29 @@ def _record_action(task_id: int, action: str) -> dict:
         # 冪等ガード: 同日に done/skip 記録が既にあれば再送とみなして記録しない。
         # 完了ボタンの二度押し・通信リトライで completions が重複すると、
         # 極小 gap が EWMA に入り実効間隔が下限まで誤学習するため。
+        # 素の SELECT→INSERT では同時リクエストが両方「記録なし」を観測して
+        # 二重挿入になる（Codex レビューで再現）ため、BEGIN IMMEDIATE で
+        # 書き込みロックを取ってから確認・挿入を行い原子化する。
         d = today_jst()
-        existing = conn.execute(
-            "SELECT 1 FROM completions WHERE task_id = ? AND completed_at >= ? AND completed_at < ? LIMIT 1",
-            (
-                task_id,
-                datetime.combine(d, time.min, tzinfo=JST).isoformat(),
-                datetime.combine(d + timedelta(days=1), time.min, tzinfo=JST).isoformat(),
-            ),
-        ).fetchone()
-        if existing is None:
-            conn.execute(
-                "INSERT INTO completions (task_id, completed_at, action) VALUES (?, ?, ?)",
-                (task_id, now_jst().isoformat(), action),
-            )
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = conn.execute(
+                "SELECT 1 FROM completions WHERE task_id = ? AND completed_at >= ? AND completed_at < ? LIMIT 1",
+                (
+                    task_id,
+                    datetime.combine(d, time.min, tzinfo=JST).isoformat(),
+                    datetime.combine(d + timedelta(days=1), time.min, tzinfo=JST).isoformat(),
+                ),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO completions (task_id, completed_at, action) VALUES (?, ?, ?)",
+                    (task_id, now_jst().isoformat(), action),
+                )
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         return next_payload(conn)
 
 
