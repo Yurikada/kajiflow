@@ -2,6 +2,7 @@
 #   - KajiFlow_NotifyDigest   : 毎朝 7:30 に scripts\notify_digest.py
 #   - KajiFlow_ObsidianWeekly : 毎週日曜 21:00 に scripts\obsidian_weekly.py
 #   - KajiFlow_GTasksSync     : 30分ごとに scripts\gtasks_sync.py
+#   - KajiFlow_Server         : ログオン時に scripts\run_server.ps1（非表示、ログは data\server.log）
 # 登録のみを行う（このスクリプトはタスクを即時実行しない）。
 #
 # 使い方:
@@ -46,6 +47,20 @@ $tasks = @(
         Trigger     = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
                         -RepetitionInterval (New-TimeSpan -Minutes 30) `
                         -RepetitionDuration (New-TimeSpan -Days 3650)  # MaxValue はタスクXMLの Duration として不正
+    },
+    [pscustomobject]@{
+        Name        = "KajiFlow_Server"
+        Description = "KajiFlow: ログオン時にサーバを起動（127.0.0.1:8340、非表示）"
+        Script      = Join-Path $root "scripts\run_server.ps1"
+        Schedule    = "ログオン時"
+        # 全ユーザー対象の AtLogOn は管理者権限が要る（0x80070005）ため自ユーザー限定にする
+        Trigger     = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+        # PowerShell 5.1 の *>> によるネイティブ出力リダイレクトは uvicorn を
+        # 無音で殺すため、cmd のリダイレクトで起動する（実測で確認済み）。
+        # パスに空白が入る場所へ移設する場合は引用符の追加が必要。
+        # 二重起動してもポート使用中で即終了するだけで無害。
+        Exec        = "cmd.exe"
+        Args        = "/c $python -m uvicorn app.main:app --host 127.0.0.1 --port 8340 >> $root\data\server.log 2>&1"
     }
 )
 
@@ -73,7 +88,11 @@ if ($WhatIf) {
 }
 
 foreach ($t in $tasks) {
-    $action = New-ScheduledTaskAction -Execute $python -Argument "`"$($t.Script)`"" -WorkingDirectory $root
+    if ($t.PSObject.Properties["Exec"] -and $t.Exec) {
+        $action = New-ScheduledTaskAction -Execute $t.Exec -Argument $t.Args -WorkingDirectory $root
+    } else {
+        $action = New-ScheduledTaskAction -Execute $python -Argument "`"$($t.Script)`"" -WorkingDirectory $root
+    }
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $t.Name -Description $t.Description `
         -Action $action -Trigger $t.Trigger -Settings $settings -Force | Out-Null
