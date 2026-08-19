@@ -90,6 +90,16 @@ class TestEffectiveInterval:
         task = make_task(1, interval_days=3, adaptive=0)
         assert engine.effective_interval(task, [10.0, 10.0, 10.0]) == 3.0
 
+    def test_tiny_gaps_excluded_from_learning(self):
+        """再送・二重記録由来の極小 gap（<0.1日）は EWMA 学習に使わない。"""
+        task = make_task(1, interval_days=3, adaptive=1)
+        # 極小 gap が混ざっても、それを除いた gap 列と同じ結果になる
+        with_tiny = engine.effective_interval(task, [3.0, 0.001, 3.0, 3.0])
+        without = engine.effective_interval(task, [3.0, 3.0, 3.0])
+        assert with_tiny == without == pytest.approx(3.0)
+        # 極小 gap を除くと2件未満になる場合は interval_days に戻る
+        assert engine.effective_interval(task, [0.001, 0.002, 3.0]) == 3.0
+
     def test_fewer_than_two_gaps_returns_interval_days(self):
         task = make_task(1, interval_days=3, adaptive=1)
         assert engine.effective_interval(task, []) == 3.0

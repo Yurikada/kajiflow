@@ -1,6 +1,7 @@
 ﻿# KajiFlow の定期実行タスクを Windows タスクスケジューラに登録する。
 #   - KajiFlow_NotifyDigest   : 毎朝 7:30 に scripts\notify_digest.py
 #   - KajiFlow_ObsidianWeekly : 毎週日曜 21:00 に scripts\obsidian_weekly.py
+#   - KajiFlow_GTasksSync     : 30分ごとに scripts\gtasks_sync.py
 # 登録のみを行う（このスクリプトはタスクを即時実行しない）。
 #
 # 使い方:
@@ -36,6 +37,15 @@ $tasks = @(
         Script      = Join-Path $root "scripts\obsidian_weekly.py"
         Schedule    = "毎週日曜 21:00"
         Trigger     = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At "21:00"
+    },
+    [pscustomobject]@{
+        Name        = "KajiFlow_GTasksSync"
+        Description = "KajiFlow: 30分ごとに Google Tasks 同期（API 経由）を発火"
+        Script      = Join-Path $root "scripts\gtasks_sync.py"
+        Schedule    = "30分ごと"
+        Trigger     = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
+                        -RepetitionInterval (New-TimeSpan -Minutes 30) `
+                        -RepetitionDuration ([TimeSpan]::MaxValue)
     }
 )
 

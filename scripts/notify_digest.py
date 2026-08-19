@@ -63,15 +63,21 @@ def main() -> int:
     message = build_message(today.get("items") or [])
 
     # --- ntfy へ POST ---
+    headers = {
+        "Title": "KajiFlow",  # ntfy ヘッダは ASCII のみ安全なため本文に日本語を置く
+        "Tags": "broom",
+        "Content-Type": "text/plain; charset=utf-8",
+    }
+    # ntfy.sh の公開トピックは URL を知る誰でも購読/送信できるため、
+    # アクセストークン（セルフホストや ntfy.sh の認証設定）があれば付与する。
+    token = (settings.get("ntfy_token") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
         f"{server}/{topic}",
         data=message.encode("utf-8"),
         method="POST",
-        headers={
-            "Title": "KajiFlow",  # ntfy ヘッダは ASCII のみ安全なため本文に日本語を置く
-            "Tags": "broom",
-            "Content-Type": "text/plain; charset=utf-8",
-        },
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:

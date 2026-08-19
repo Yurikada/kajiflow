@@ -13,7 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "kajiflow.db"
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -69,6 +69,15 @@ CREATE TABLE IF NOT EXISTS vault_tasks (
   last_seen_at TEXT NOT NULL,
   meta_json TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE TABLE IF NOT EXISTS gtasks_links (
+  kind TEXT,
+  local_id TEXT,
+  gtask_id TEXT,
+  list_id TEXT,
+  synced_at TEXT,
+  PRIMARY KEY (kind, local_id)
+);
 """
 
 
@@ -87,6 +96,10 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL で読み書きの並行性を上げる（gtasks 同期のような長めの書き込み中でも
+    # 他 API の読み取りがブロックされない）。設定は DB ファイルに永続化されるが、
+    # 毎接続で実行しても冪等。
+    conn.execute("PRAGMA journal_mode = WAL")
     init_db(conn)
     return conn
 
@@ -102,7 +115,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     """user_version ベースの簡易マイグレーション。"""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
-        # v2: vault_tasks 追加。テーブル作成自体は SCHEMA_SQL の
-        # CREATE TABLE IF NOT EXISTS が既存 DB にも冪等に適用する。
-        # 将来のスキーマ変更はここに version 判定で追加する
+        # v2: vault_tasks 追加 / v3: gtasks_links 追加。テーブル作成自体は
+        # SCHEMA_SQL の CREATE TABLE IF NOT EXISTS が既存 DB にも冪等に
+        # 適用する。将来のスキーマ変更はここに version 判定で追加する
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

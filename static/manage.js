@@ -199,7 +199,17 @@ async function loadSettings() {
   $("s-budget").value = s.daily_budget_min ?? "30";
   $("s-topic").value = s.ntfy_topic ?? "";
   $("s-server").value = s.ntfy_server ?? "https://ntfy.sh";
+  $("s-token").value = s.ntfy_token ?? "";
 }
+
+// 推測されにくいトピック名を生成（ntfy.sh のトピックは実質公開のため）
+$("btn-gen-topic").addEventListener("click", () => {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  $("s-topic").value = `kajiflow-${hex}`;
+  showToast("トピック名を生成しました。保存を忘れずに");
+});
 
 $("settings-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -210,11 +220,62 @@ $("settings-form").addEventListener("submit", async (ev) => {
         daily_budget_min: $("s-budget").value || "30",
         ntfy_topic: $("s-topic").value.trim(),
         ntfy_server: $("s-server").value.trim() || "https://ntfy.sh",
+        ntfy_token: $("s-token").value.trim(),
       },
     });
     showToast("設定を保存しました");
   } catch (e) {
     showToast(e.message);
+  }
+});
+
+// ---------------------------------------------------------------- Google Tasks 連携
+
+function formatSyncTime(iso) {
+  // ISO 8601 → 'YYYY-MM-DD HH:MM'（表示用。パースできなければそのまま）
+  const m = String(iso || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  return m ? `${m[1]} ${m[2]}` : String(iso || "");
+}
+
+function renderGtasksWarnings(warnings) {
+  const listEl = $("gt-warnings");
+  listEl.hidden = !warnings || warnings.length === 0;
+  listEl.innerHTML = (warnings || [])
+    .map((w) => `<li>${escapeHtml(w)}</li>`)
+    .join("");
+}
+
+async function loadGtasksStatus() {
+  const s = await api("/api/gtasks/status");
+  $("gt-auth").textContent = s.authorized
+    ? "認証状態: 認証済み"
+    : "認証状態: 未認証";
+  $("gt-auth-hint").hidden = s.authorized;
+  $("gt-last-sync").textContent = s.last_sync_at
+    ? `最終同期: ${formatSyncTime(s.last_sync_at)}`
+    : "最終同期: まだ同期していません";
+  renderGtasksWarnings(s.last_result ? s.last_result.warnings : []);
+}
+
+$("btn-gtasks-sync").addEventListener("click", async (ev) => {
+  const btn = ev.currentTarget;
+  btn.disabled = true;
+  btn.textContent = "同期中…";
+  try {
+    const res = await api("/api/gtasks/sync", { method: "POST" });
+    const warnings = res.warnings || [];
+    showToast(
+      `同期しました（push ${res.pushed}件・Vault完了 ${res.completed_in_vault}件・` +
+      `家事完了 ${res.completed_chores}件・新規取込 ${res.new_from_google}件` +
+      (warnings.length ? `・警告 ${warnings.length}件` : "") + "）"
+    );
+    renderGtasksWarnings(warnings);
+    await loadGtasksStatus();
+  } catch (e) {
+    showToast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "今すぐ同期";
   }
 });
 
@@ -240,7 +301,7 @@ $("btn-regenerate").addEventListener("click", async () => {
 (async function init() {
   updateScheduleVisibility();
   try {
-    await Promise.all([loadTasks(), loadTemplates(), loadSettings()]);
+    await Promise.all([loadTasks(), loadTemplates(), loadSettings(), loadGtasksStatus()]);
   } catch (e) {
     showToast(e.message);
   }

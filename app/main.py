@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import asynccontextmanager, closing
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db as dbmod
-from . import engine, seed, vault
+from . import engine, gtasks, seed, vault
+from .engine import JST
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -28,6 +30,7 @@ SETTINGS_DEFAULTS: dict[str, str] = {
     "daily_budget_min": "30",
     "ntfy_topic": "",
     "ntfy_server": "https://ntfy.sh",
+    "ntfy_token": "",
 }
 
 VALID_SCHEDULE_TYPES = ("interval", "weekly")
@@ -241,11 +244,24 @@ def _record_action(task_id: int, action: str) -> dict:
         task = fetch_task(conn, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="タスクが見つかりません")
-        conn.execute(
-            "INSERT INTO completions (task_id, completed_at, action) VALUES (?, ?, ?)",
-            (task_id, now_jst().isoformat(), action),
-        )
-        conn.commit()
+        # 冪等ガード: 同日に done/skip 記録が既にあれば再送とみなして記録しない。
+        # 完了ボタンの二度押し・通信リトライで completions が重複すると、
+        # 極小 gap が EWMA に入り実効間隔が下限まで誤学習するため。
+        d = today_jst()
+        existing = conn.execute(
+            "SELECT 1 FROM completions WHERE task_id = ? AND completed_at >= ? AND completed_at < ? LIMIT 1",
+            (
+                task_id,
+                datetime.combine(d, time.min, tzinfo=JST).isoformat(),
+                datetime.combine(d + timedelta(days=1), time.min, tzinfo=JST).isoformat(),
+            ),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO completions (task_id, completed_at, action) VALUES (?, ?, ?)",
+                (task_id, now_jst().isoformat(), action),
+            )
+            conn.commit()
         return next_payload(conn)
 
 
@@ -557,6 +573,70 @@ def api_vault_prompt(uid: str) -> PlainTextResponse:
         return PlainTextResponse(
             vault.build_prompt(task), media_type="text/plain; charset=utf-8"
         )
+
+
+# -------------------------------------------------- gtasks 連携
+
+# sync def エンドポイントはスレッドプールで並行実行されるため、Task Scheduler
+# （30分ごと）・manage の「今すぐ同期」・エージェントの同期発火が重なると
+# sync_all の insert が二重実行されて Google / Vault に重複タスクが生まれる。
+# プロセス内 Lock で直列化する（uvicorn 単一プロセス前提なので十分）。
+_gtasks_sync_lock = threading.Lock()
+
+
+@app.post("/api/gtasks/sync")
+def api_gtasks_sync() -> dict:
+    if not _gtasks_sync_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Google Tasks 同期は実行中です。完了を待って再試行してください",
+        )
+    try:
+        with closing(get_conn()) as conn:
+            try:
+                client = gtasks.build_client()
+            except gtasks.GTasksAuthError as e:
+                raise HTTPException(status_code=503, detail=str(e))
+            ensure_today_plan(conn)
+            try:
+                result = gtasks.sync_all(conn, client, now_jst())
+            except gtasks.GTasksAuthError as e:
+                raise HTTPException(status_code=503, detail=str(e))
+            except gtasks.GTasksError as e:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Google Tasks との同期に失敗しました: {e}",
+                )
+            now = now_jst().isoformat()
+            for key, value in (
+                ("gtasks_last_sync_at", now),
+                ("gtasks_last_result", json.dumps(result, ensure_ascii=False)),
+            ):
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
+            conn.commit()
+            return result
+    finally:
+        _gtasks_sync_lock.release()
+
+
+@app.get("/api/gtasks/status")
+def api_gtasks_status() -> dict:
+    with closing(get_conn()) as conn:
+        last_sync_at = get_setting(conn, "gtasks_last_sync_at") or None
+        raw = get_setting(conn, "gtasks_last_result")
+        try:
+            last_result = json.loads(raw) if raw else None
+        except ValueError:
+            last_result = None
+        return {
+            "authorized": gtasks.is_authorized(),
+            "last_sync_at": last_sync_at,
+            "last_result": last_result,
+        }
 
 
 # -------------------------------------------------- static

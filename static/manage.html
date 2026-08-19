@@ -93,14 +93,33 @@
       </div>
       <div class="field">
         <label for="s-topic">ntfy トピック（通知を使う場合）</label>
-        <input type="text" id="s-topic" placeholder="例: kajiflow-xxxx" autocomplete="off">
+        <div class="field-row">
+          <input type="text" id="s-topic" placeholder="例: kajiflow-xxxx" autocomplete="off">
+          <button type="button" class="icon-btn" id="btn-gen-topic">生成</button>
+        </div>
+        <p class="field-note">ntfy.sh のトピックは URL を知っていれば誰でも購読・送信できます。「生成」で推測されにくい名前を作るか、セルフホスト + アクセストークンを使ってください。</p>
       </div>
       <div class="field">
         <label for="s-server">ntfy サーバー</label>
         <input type="text" id="s-server" placeholder="https://ntfy.sh">
       </div>
+      <div class="field">
+        <label for="s-token">ntfy アクセストークン（任意）</label>
+        <input type="password" id="s-token" placeholder="tk_..." autocomplete="off">
+      </div>
       <button type="submit" class="btn-primary">設定を保存</button>
     </form>
+
+    <h2>Google Tasks 連携</h2>
+    <div class="card">
+      <p class="gt-line" id="gt-auth">認証状態を確認しています…</p>
+      <p class="gt-line" id="gt-auth-hint" hidden>
+        PC で <code>scripts/gtasks_auth.py</code> を実行すると認証できます。
+      </p>
+      <p class="gt-line" id="gt-last-sync"></p>
+      <button type="button" class="btn-primary" id="btn-gtasks-sync">今すぐ同期</button>
+      <ul class="gt-warnings" id="gt-warnings" hidden></ul>
+    </div>
 
     <h2>今日のプラン</h2>
     <div class="card">

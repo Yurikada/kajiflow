@@ -20,6 +20,7 @@ EWMA_ALPHA = 0.3   # 新しい gap ほど重い
 MAX_GAPS = 5       # 学習に使う直近 gap 数
 CLAMP_LOW = 0.5    # eff_interval の下限係数
 CLAMP_HIGH = 2.0   # eff_interval の上限係数
+MIN_GAP_DAYS = 0.1  # これ未満の gap は再送・二重記録由来とみなし学習に使わない
 
 
 def parse_dt(value: str | datetime) -> datetime:
@@ -64,6 +65,9 @@ def effective_interval(task: dict, gaps: list[float]) -> float:
       [0.5*interval_days, 2.0*interval_days] にクランプして返す。
     """
     interval = float(task.get("interval_days") or 0.0)
+    # 極小 gap（既定 0.1 日未満）は再送・二重記録由来の異常値として学習から除外する。
+    # これが混ざると EWMA が下限クランプまで引きずられ実効間隔が誤学習する。
+    gaps = [g for g in gaps if g >= MIN_GAP_DAYS]
     if not task.get("adaptive") or len(gaps) < 2:
         return interval
     recent = gaps[-MAX_GAPS:]  # 昇順（古い→新しい）前提

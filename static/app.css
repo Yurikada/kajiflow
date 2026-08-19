@@ -345,6 +345,7 @@ button:disabled {
 }
 
 .field input[type="text"],
+.field input[type="password"],
 .field input[type="number"],
 .field select,
 .field textarea {
@@ -359,6 +360,12 @@ button:disabled {
 }
 
 .field textarea { resize: vertical; min-height: 60px; }
+
+.field-note {
+  font-size: 0.78rem;
+  color: var(--text-sub);
+  margin: 6px 0 0;
+}
 
 .field-row {
   display: flex;
@@ -547,6 +554,22 @@ button:disabled {
   padding: 8px 0;
   font-size: 0.85rem;
 }
+
+/* Google Tasks 連携カード（manage.html） */
+.gt-line {
+  margin: 0 0 8px;
+  color: var(--text-sub);
+  font-size: 0.85rem;
+}
+
+.gt-warnings {
+  margin: 12px 0 0;
+  padding-left: 1.2em;
+  color: var(--text-sub);
+  font-size: 0.85rem;
+}
+
+.gt-warnings li { margin-bottom: 4px; }
 
 /* トースト */
 .toast {

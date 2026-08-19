@@ -6,7 +6,7 @@
 
 "use strict";
 
-const CACHE_NAME = "kajiflow-static-v5";
+const CACHE_NAME = "kajiflow-static-v6";
 const ASSETS = [
   "/",
   "/index.html",

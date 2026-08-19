@@ -63,6 +63,18 @@ class TestBasics:
         assert body["done_count"] == 0
         assert body["total_count"] == 0
 
+    def test_db_connections_use_wal(self, db_path):
+        # gtasks 同期のような長めの書き込み中でも他 API の読み取りが
+        # ブロックされないよう、接続は WAL モードで開く
+        from app import db as dbmod
+
+        conn = dbmod.connect(db_path)
+        try:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            conn.close()
+        assert mode == "wal"
+
     def test_today_with_empty_plan(self, client):
         res = client.get("/api/today")
         assert res.status_code == 200
@@ -179,6 +191,23 @@ class TestNextCompleteFlow:
         assert body["task"] is None  # 全部終わり
         assert body["done_count"] == 2
         assert body["total_count"] == 2
+
+    def test_complete_resend_is_idempotent(self, client, raw_conn):
+        """同日の complete 再送は completions を重複させない（EWMA 誤学習防止）。"""
+        t1, t2 = self._setup_two_due_tasks(client, raw_conn)
+
+        first = client.post(f"/api/tasks/{t1['id']}/complete").json()
+        resend = client.post(f"/api/tasks/{t1['id']}/complete").json()
+        assert resend["done_count"] == first["done_count"] == 1  # 増えない
+
+        conn = raw_conn()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM completions WHERE task_id = ?", (t1["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 1  # 記録は1件のみ
 
     def test_skip_moves_to_next_without_done_count(self, client, raw_conn):
         t1, t2 = self._setup_two_due_tasks(client, raw_conn)

@@ -211,6 +211,61 @@ vault_tasks(
 
 ASSETS に /vault.html, /vault.js を追加し、CACHE_NAME を v4 に上げる。
 
+## Google Tasks 連携（v3）
+
+Google Tasks をスマホ側の入出力面として接続する。**kajiflow が唯一の認証保持者**であり、codex / claude は Google API を直接触らず kajiflow の REST API と Vault 経由で接続する。正本の序列は変えない: タスクの存在は Vault / kajiflow が正、Google Tasks は「完了操作」と「新規追加」の入力面。
+
+### 認証
+
+- OAuth 2.0 インストールアプリフロー（`google-auth-oauthlib` の InstalledAppFlow、スコープ `https://www.googleapis.com/auth/tasks`）。
+- `data/client_secret.json`（ユーザーが Google Cloud Console から取得・配置）と `data/gtasks_token.json`（取得トークン、自動リフレッシュ）。両方 gitignore 済みの data/ に置く。
+- `scripts/gtasks_auth.py`: 初回認証をユーザー自身が実行する（ブラウザ同意が開く）。kajiflow サーバ・エージェントは認証フローを起動しない。未認証時の API は 503 で「scripts/gtasks_auth.py を実行してください」を返す。
+
+### 対象リストとマッピング
+
+- Google Tasks 側に2リストを使う（無ければ作成）: **「Vault タスク」** と **「KajiFlow 家事」**。
+- 対応表 `gtasks_links(kind TEXT, local_id TEXT, gtask_id TEXT, list_id TEXT, synced_at TEXT, PRIMARY KEY(kind, local_id))`。kind='vault'（local_id=uid）/ kind='chore'（local_id=`{date}:{task_id}`）。
+
+### 同期ロジック（app/gtasks.py、`sync_all()` を全体調停として実装）
+
+**Vault タスク（kind='vault'）**
+1. push: 未完了・非ハンドオフの vault_tasks を「Vault タスク」リストへ upsert。title=タイトル、notes=`uid: {uid}` + 目的/完了条件（あれば）+ 固定文言「(KajiFlow同期)」、due=期限。**ハンドオフチケットは Google Tasks に出さない**（エージェント管理領域のため）。
+2. pull 完了: Google 側で completed になった連携済みタスク → 既存の `complete_in_vault`（安全規則そのまま）で Vault 書き戻し。409（曖昧・ハンドオフ化・消滅）は書き込まず、同期結果の `warnings` に日本語で載せて Google 側は completed のまま放置。
+3. pull 新規: 「Vault タスク」リストに Google 側で直接追加されたタスク（notes に uid が無いもの）→ `agent_memory_io.py add-task` を subprocess で呼んで Vault 正本に追記（--source "Google Tasks"、title をそのまま task に。due があれば --due）。スクリプトパスは `KAJIFLOW_MEMORY_IO` 環境変数（既定 `%USERPROFILE%\OneDrive\ドキュメント\KnowledgeBase\95_System\scripts\agent_memory_io.py`）。追記後に vault 再同期すると uid が付き、次回 push でリンクされる。
+4. Vault 側で完了/消滅したタスク → Google 側を completed にする（消滅は delete）。
+
+**家事（kind='chore'）**
+1. push: 当日プランの pending タスクを「KajiFlow 家事」リストへ upsert（due=当日）。完了/スキップ済みは completed にする。前日以前の chore リンクは Google 側を削除してから当日分を push（リストは常に「今日」を映す）。
+2. pull: Google 側で completed になった当日 pending → kajiflow の complete API 相当（記録 action='done'）。
+
+**方針**
+- 同期は冪等。同一入力で2回実行しても差分ゼロ。
+- タイトル変更は kajiflow→Google の一方向上書き（Google 側での改名は次回同期で戻る）。
+- ネットワーク・API エラーは同期全体を落とさず、項目単位で warnings に集約。認証切れは 503。
+
+### API 追加
+
+- `POST /api/gtasks/sync` → `{pushed, completed_in_vault, completed_chores, new_from_google, warnings: [...]}`。
+- `GET /api/gtasks/status` → `{authorized: bool, last_sync_at, last_result}`（settings テーブルに保存）。
+
+### UI（manage 設定に追記）
+
+「Google Tasks 連携」カード: 認証状態（未認証なら `scripts/gtasks_auth.py` 実行案内を表示）、「今すぐ同期」ボタン、最終同期時刻と warnings 表示。色付き警告は使わず事実表示のみ。
+
+### scripts/
+
+- `scripts/gtasks_auth.py`: 初回 OAuth（同意ブラウザ起動）→ token 保存 → 疎通確認（リスト一覧表示）。
+- `scripts/gtasks_sync.py`: API `POST /api/gtasks/sync` を叩くだけの薄いラッパ（API 不達時 exit 0、notify_digest.py と同じ流儀）。`register_tasks.ps1` に「KajiFlow_GTasksSync（30分ごと）」の登録を追加。
+
+### テスト
+
+Google API はネットワークを一切叩かない。`app/gtasks.py` は Tasks API 呼び出しを薄い `GTasksClient` クラス（tasklists/tasks の list/insert/patch/delete）に隔離し、テストはフェイク実装を注入。冪等性・ハンドオフ除外・完了 pull→Vault 書き戻し・新規 pull→add-task subprocess（monkeypatch で捕捉）・chore の日替わり・認証なし 503 を検証。
+
+### エージェント接続（実装物としてはドキュメント）
+
+- codex / claude からの操作面: kajiflow REST API（/api/vault/tasks で分類・指示文取得、/api/gtasks/sync で同期発火）。Google 認証情報はエージェントに渡さない。
+- kajiflow/CLAUDE.md と AGENTS.md に API 一覧と「Google Tasks へ直接アクセスしない」規約を追記する。
+
 ## 非スコープ（今回作らない）
 
 - 認証・マルチユーザー・家族共有
