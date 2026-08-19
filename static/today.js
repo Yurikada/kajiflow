@@ -50,3 +50,4 @@ async function load() {
 }
 
 load();
+refreshOnReturn(load); // PWA 復帰・日付またぎで再取得

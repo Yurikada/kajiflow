@@ -277,11 +277,14 @@ $("btn-sync").addEventListener("click", async () => {
 
 // ---------------------------------------------------------------- init
 
-(async function init() {
+async function initLoad() {
   await syncVault(); // 画面表示時に自動同期（失敗時はトースト表示のみ）
   try {
     await loadTasks();
   } catch (e) {
     showToast(e.message);
   }
-})();
+}
+
+initLoad();
+refreshOnReturn(initLoad); // PWA 復帰時も同期→再取得

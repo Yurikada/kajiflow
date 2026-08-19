@@ -76,3 +76,4 @@ els.btnDone.addEventListener("click", () => act("complete"));
 els.btnSkip.addEventListener("click", () => act("skip"));
 
 load();
+refreshOnReturn(load); // PWA 復帰・日付またぎで再取得

@@ -90,6 +90,29 @@ function appConfirm({ title, message = "", showNote = false, confirmLabel = "確
   });
 }
 
+/**
+ * 画面復帰時のデータ再取得を登録する。
+ * PWA がバックグラウンドから復帰しても JS は再実行されないため、
+ * visibilitychange / focus / bfcache 復元（pageshow persisted）で reload を呼ぶ。
+ * 日付またぎもサーバ側 API が当日基準で応答するため再取得だけで正しくなる。
+ * 連続発火（フォーカス+visible 等）は 5 秒のガードでまとめる。
+ */
+function refreshOnReturn(reload) {
+  let last = Date.now(); // 初回ロード直後の重複再取得を避ける
+  const maybe = () => {
+    if (Date.now() - last < 5000) return;
+    last = Date.now();
+    reload();
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") maybe();
+  });
+  window.addEventListener("focus", maybe);
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) maybe();
+  });
+}
+
 const WEEKDAY_LABELS = ["月", "火", "水", "木", "金", "土", "日"];
 
 /** '0,3' 形式 → '月・木' 表示 */

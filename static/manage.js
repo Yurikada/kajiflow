@@ -305,4 +305,12 @@ $("btn-regenerate").addEventListener("click", async () => {
   } catch (e) {
     showToast(e.message);
   }
+  // PWA 復帰時は表示系のみ再取得（設定フォームは入力中の値を壊さないため触らない）
+  refreshOnReturn(async () => {
+    try {
+      await Promise.all([loadTasks(), loadGtasksStatus()]);
+    } catch (e) {
+      showToast(e.message);
+    }
+  });
 })();
