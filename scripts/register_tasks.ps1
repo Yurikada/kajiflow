@@ -45,7 +45,7 @@ $tasks = @(
         Schedule    = "30分ごと"
         Trigger     = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
                         -RepetitionInterval (New-TimeSpan -Minutes 30) `
-                        -RepetitionDuration ([TimeSpan]::MaxValue)
+                        -RepetitionDuration (New-TimeSpan -Days 3650)  # MaxValue はタスクXMLの Duration として不正
     }
 )
 
