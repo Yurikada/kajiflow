@@ -295,7 +295,10 @@ def _record_action(task_id: int, action: str) -> dict:
         except Exception:
             conn.rollback()
             raise
-        return next_payload(conn)
+        payload = next_payload(conn)
+        # 前倒し完了 UI が「記録された / 既に記録済み」を案内できるようにする
+        payload["recorded"] = existing is None
+        return payload
 
 
 @app.post("/api/tasks/{task_id}/complete")

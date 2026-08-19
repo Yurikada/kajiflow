@@ -26,9 +26,24 @@ async function loadTasks() {
         <div class="name">${escapeHtml(task.name)}</div>
         <div class="meta">${escapeHtml(task.category)}・${escapeHtml(scheduleLabel(task))}・約${task.est_minutes}分</div>
       </div>
+      <button type="button" class="icon-btn" data-act="done-now">✅ 今日やった</button>
       <button type="button" class="icon-btn" data-act="edit">編集</button>
       <button type="button" class="icon-btn danger" data-act="delete">削除</button>
     `;
+    row.querySelector('[data-act="done-now"]').addEventListener("click", async () => {
+      const { ok } = await appConfirm({
+        title: `「${task.name}」を今日完了にしますか？`,
+        message: "前倒し実施の記録です。次回の周期は今日を起点にずれます。",
+        confirmLabel: "完了にする",
+      });
+      if (!ok) return;
+      try {
+        const res = await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
+        showToast(res.recorded ? "完了を記録しました" : "今日は既に記録済みです");
+      } catch (e) {
+        showToast(e.message);
+      }
+    });
     row.querySelector(".toggle input").addEventListener("change", async (ev) => {
       try {
         await api(`/api/tasks/${task.id}`, {

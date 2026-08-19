@@ -290,6 +290,8 @@ class TestNextCompleteFlow:
         first = client.post(f"/api/tasks/{t1['id']}/complete").json()
         resend = client.post(f"/api/tasks/{t1['id']}/complete").json()
         assert resend["done_count"] == first["done_count"] == 1  # 増えない
+        assert first["recorded"] is True    # 初回は記録された
+        assert resend["recorded"] is False  # 再送は記録されていない
 
         conn = raw_conn()
         try:
