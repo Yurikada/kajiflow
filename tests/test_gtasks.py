@@ -833,6 +833,55 @@ class TestChores:
         count = conn.execute("SELECT COUNT(*) AS c FROM completions").fetchone()
         assert count["c"] == 1
 
+    def test_undo_reverts_stale_google_completed(self, vault_file, conn, fake):
+        """取り消し墓標より古い Google 側 completed は needsAction に戻し、再記録しない。"""
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        (tid,) = self._prepare(vault_file, conn, ["風呂掃除"])
+        run_sync(conn, fake)
+        g = fake.task_by_title(gtasks.CHORE_LIST_TITLE, "風呂掃除")
+        # スマホで完了（1時間前）→ kajiflow 側で取り消し（墓標の方が新しい）
+        g["status"] = "completed"
+        g["completed"] = (_dt.now(_tz.utc) - _td(hours=1)).isoformat()
+        conn.execute(
+            "INSERT INTO completions (task_id, completed_at, action) VALUES (?, ?, 'undo')",
+            (tid, _dt.now(gtasks.JST).isoformat()),
+        )
+        conn.commit()
+
+        result = run_sync(conn, fake)
+
+        assert g["status"] == "needsAction"  # push フェーズが Google 側を戻した
+        assert result["completed_chores"] == 0
+        done = conn.execute(
+            "SELECT COUNT(*) AS c FROM completions WHERE action = 'done'"
+        ).fetchone()
+        assert done["c"] == 0  # pull が再完了を記録していない
+
+    def test_recomplete_after_undo_records_done(self, vault_file, conn, fake):
+        """取り消し後にスマホで改めて完了（completed が墓標より新しい）→ 通常どおり記録。"""
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        (tid,) = self._prepare(vault_file, conn, ["風呂掃除"])
+        run_sync(conn, fake)
+        g = fake.task_by_title(gtasks.CHORE_LIST_TITLE, "風呂掃除")
+        conn.execute(
+            "INSERT INTO completions (task_id, completed_at, action) VALUES (?, ?, 'undo')",
+            (tid, _dt.now(gtasks.JST).isoformat()),
+        )
+        conn.commit()
+        g["status"] = "completed"
+        g["completed"] = (_dt.now(_tz.utc) + _td(hours=1)).isoformat()
+
+        result = run_sync(conn, fake)
+
+        assert g["status"] == "completed"  # push は戻さない
+        assert result["completed_chores"] == 1
+        done = conn.execute(
+            "SELECT COUNT(*) AS c FROM completions WHERE action = 'done'"
+        ).fetchone()
+        assert done["c"] == 1
+
     def test_locally_done_chore_marks_google_completed(self, vault_file, conn, fake):
         (tid,) = self._prepare(vault_file, conn, ["風呂掃除"])
         run_sync(conn, fake)

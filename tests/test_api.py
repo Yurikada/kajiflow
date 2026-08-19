@@ -330,6 +330,41 @@ class TestNextCompleteFlow:
             conn.close()
         assert count == 1
 
+    def test_uncomplete_restores_pending(self, client, raw_conn):
+        """完了取り消しで pending に戻り、次の1件にも復帰する。"""
+        t1, t2 = self._setup_two_due_tasks(client, raw_conn)
+
+        client.post(f"/api/tasks/{t1['id']}/complete")
+        res = client.post(f"/api/tasks/{t1['id']}/uncomplete")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["restored"] is True
+        assert body["done_count"] == 0
+        assert body["task"]["id"] == t1["id"]  # 先頭に復帰
+
+        items = client.get("/api/today").json()["items"]
+        statuses = {i["task"]["id"]: i["status"] for i in items}
+        assert statuses[t1["id"]] == "pending"
+
+        # 取り消し後の再完了は普通にできる（undo 墓標が冪等ガードを塞がない）
+        body = client.post(f"/api/tasks/{t1['id']}/complete").json()
+        assert body["recorded"] is True
+        assert body["done_count"] == 1
+
+    def test_uncomplete_without_record_reports_false(self, client, raw_conn):
+        t1, _t2 = self._setup_two_due_tasks(client, raw_conn)
+        body = client.post(f"/api/tasks/{t1['id']}/uncomplete").json()
+        assert body["restored"] is False
+
+    def test_uncomplete_removes_legacy_skip(self, client, raw_conn):
+        t1, _t2 = self._setup_two_due_tasks(client, raw_conn)
+        client.post(f"/api/tasks/{t1['id']}/skip")
+        body = client.post(f"/api/tasks/{t1['id']}/uncomplete").json()
+        assert body["restored"] is True
+        items = client.get("/api/today").json()["items"]
+        statuses = {i["task"]["id"]: i["status"] for i in items}
+        assert statuses[t1["id"]] == "pending"
+
     def test_defer_moves_task_to_end_without_record(self, client, raw_conn):
         """あとまわしは最後尾へ回すだけで completions に記録しない。"""
         t1, t2 = self._setup_two_due_tasks(client, raw_conn)

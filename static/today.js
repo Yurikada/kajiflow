@@ -22,7 +22,23 @@ async function completeFromList(task) {
   if (!ok) return;
   try {
     await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
-    showToast("完了にしました");
+    showToast("完了にしました（タップで取り消せます）");
+    await load();
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+async function uncompleteFromList(task) {
+  const { ok } = await appConfirm({
+    title: `「${task.name}」の記録を取り消しますか？`,
+    message: "未完了に戻ります。Google Tasks 側も戻します。",
+    confirmLabel: "取り消す",
+  });
+  if (!ok) return;
+  try {
+    const res = await api(`/api/tasks/${task.id}/uncomplete`, { method: "POST" });
+    showToast(res.restored ? "未完了に戻しました" : "今日の記録はありません");
     await load();
   } catch (e) {
     showToast(e.message);
@@ -63,6 +79,12 @@ async function load() {
         li.setAttribute("role", "button");
         li.setAttribute("aria-label", `${task.name} を完了にする`);
         li.addEventListener("click", () => completeFromList(task));
+      } else {
+        // done / skip 行はタップで取り消し（誤タップの救済）
+        li.classList.add("is-tappable");
+        li.setAttribute("role", "button");
+        li.setAttribute("aria-label", `${task.name} の記録を取り消す`);
+        li.addEventListener("click", () => uncompleteFromList(task));
       }
       list.appendChild(li);
     }

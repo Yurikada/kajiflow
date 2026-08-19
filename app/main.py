@@ -160,6 +160,8 @@ def today_statuses(conn: sqlite3.Connection, d: date) -> dict[int, str]:
     statuses: dict[int, str] = {}
     for r in rows:
         tid, action = r["task_id"], r["action"]
+        if action not in ("done", "skip"):
+            continue  # 'undo'（取り消しの墓標）は状態に影響しない
         if statuses.get(tid) != "done":
             statuses[tid] = action
     return statuses
@@ -279,7 +281,8 @@ def _record_action(task_id: int, action: str) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         try:
             existing = conn.execute(
-                "SELECT 1 FROM completions WHERE task_id = ? AND completed_at >= ? AND completed_at < ? LIMIT 1",
+                "SELECT 1 FROM completions WHERE task_id = ? AND action IN ('done', 'skip') "
+                "AND completed_at >= ? AND completed_at < ? LIMIT 1",
                 (
                     task_id,
                     datetime.combine(d, time.min, tzinfo=JST).isoformat(),
@@ -309,6 +312,49 @@ def api_complete(task_id: int) -> dict:
 @app.post("/api/tasks/{task_id}/skip")
 def api_skip(task_id: int) -> dict:
     return _record_action(task_id, "skip")
+
+
+@app.post("/api/tasks/{task_id}/uncomplete")
+def api_uncomplete(task_id: int) -> dict:
+    """当日の完了/スキップ記録を取り消す（誤タップの救済）。
+
+    - 当日の done/skip 行を削除し、'undo' の墓標行を残す。墓標は
+      Google Tasks 同期が「取り消しより古い Google 側の completed を
+      needsAction に戻す / pull で再完了を記録しない」判定に使う
+      （取り消し後にスマホで改めて完了した場合は、completed 時刻が
+      墓標より新しいため通常どおり記録される）。
+    - Google 側は次回同期（30分毎）で戻るが、即時反映も試みる（失敗しても
+      同期で収束するため best effort）。
+    """
+    with closing(get_conn()) as conn:
+        task = fetch_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="タスクが見つかりません")
+        d = today_jst()
+        day_start = datetime.combine(d, time.min, tzinfo=JST).isoformat()
+        day_end = datetime.combine(d + timedelta(days=1), time.min, tzinfo=JST).isoformat()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = conn.execute(
+                "DELETE FROM completions WHERE task_id = ? AND action IN ('done', 'skip') "
+                "AND completed_at >= ? AND completed_at < ?",
+                (task_id, day_start, day_end),
+            )
+            restored = cur.rowcount > 0
+            if restored:
+                conn.execute(
+                    "INSERT INTO completions (task_id, completed_at, action) VALUES (?, ?, 'undo')",
+                    (task_id, now_jst().isoformat()),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        if restored:
+            gtasks.revert_chore_on_google(conn, task_id, d)  # best effort
+        payload = next_payload(conn)
+        payload["restored"] = restored
+        return payload
 
 
 @app.post("/api/tasks/{task_id}/defer")

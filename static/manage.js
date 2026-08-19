@@ -39,7 +39,20 @@ async function loadTasks() {
       if (!ok) return;
       try {
         const res = await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
-        showToast(res.recorded ? "完了を記録しました" : "今日は既に記録済みです");
+        if (res.recorded) {
+          showToast("完了を記録しました");
+        } else {
+          // 既に記録済み → 取り消し（誤操作の救済）を提案する
+          const undo = await appConfirm({
+            title: "今日は既に記録済みです",
+            message: `「${task.name}」の今日の記録を取り消しますか？`,
+            confirmLabel: "取り消す",
+          });
+          if (undo.ok) {
+            const r = await api(`/api/tasks/${task.id}/uncomplete`, { method: "POST" });
+            showToast(r.restored ? "未完了に戻しました" : "今日の記録はありません");
+          }
+        }
       } catch (e) {
         showToast(e.message);
       }

@@ -677,9 +677,55 @@ def _today_statuses(conn: sqlite3.Connection, date_str: str) -> dict[int, str]:
     ).fetchall()
     statuses: dict[int, str] = {}
     for r in rows:
+        if r["action"] not in ("done", "skip"):
+            continue  # 'undo'（取り消しの墓標）は状態に影響しない
         if statuses.get(r["task_id"]) != "done":
             statuses[r["task_id"]] = r["action"]
     return statuses
+
+
+def _undo_time(conn: sqlite3.Connection, date_str: str, task_id: int):
+    """当日の取り消し（action='undo'）の最新時刻を aware datetime で返す。無ければ None。"""
+    row = conn.execute(
+        "SELECT MAX(completed_at) AS t FROM completions "
+        "WHERE task_id = ? AND action = 'undo' AND substr(completed_at, 1, 10) = ?",
+        (task_id, date_str),
+    ).fetchone()
+    if row is None or row["t"] is None:
+        return None
+    return datetime.fromisoformat(row["t"])
+
+
+def _parse_google_ts(value: str | None):
+    """Google の RFC3339（末尾 Z）を aware datetime にする。無効なら None。"""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def revert_chore_on_google(conn: sqlite3.Connection, task_id: int, d) -> None:
+    """完了取り消し時の即時リバート（best effort）。
+
+    当日 chore リンクがあれば Google 側タスクを needsAction に戻す。
+    失敗しても墓標（undo）ベースの次回同期で収束するため、例外は握りつぶす。
+    """
+    try:
+        link = conn.execute(
+            "SELECT gtask_id, list_id FROM gtasks_links WHERE kind = 'chore' AND local_id = ?",
+            (f"{d.isoformat()}:{task_id}",),
+        ).fetchone()
+        if link is None:
+            return
+        client = build_client()
+        client.patch_task(
+            link["list_id"], link["gtask_id"],
+            {"status": "needsAction", "completed": None},
+        )
+    except Exception:
+        pass
 
 
 def _sync_chores(
@@ -724,6 +770,19 @@ def _sync_chores(
         status = statuses.get(tid)
         try:
             if status is None:  # pending
+                # 取り消し済みなのに Google 側が古い completed のまま → needsAction へ戻す。
+                # 取り消し後にスマホで改めて完了した場合（completed が墓標より新しい）は
+                # 戻さず、pull が通常どおり記録する。
+                if g is not None and g.get("status") == "completed":
+                    undo = _undo_time(conn, today, tid)
+                    g_completed = _parse_google_ts(g.get("completed"))
+                    if undo is not None and (g_completed is None or g_completed <= undo):
+                        client.patch_task(
+                            list_id, g["id"], {"status": "needsAction", "completed": None}
+                        )
+                        g["status"] = "needsAction"
+                        g.pop("completed", None)
+                        result["pushed"] += 1
                 desired = {"title": task["name"], "notes": SYNC_MARK, "due": due}
                 if g is None:
                     created = client.insert_task(
@@ -757,6 +816,13 @@ def _sync_chores(
         tid = int(local_id.split(":", 1)[1])
         if statuses.get(tid) is not None:
             continue  # 既に done/skip 記録済み
+        # 取り消し墓標より古い completed は「取り消し済みの残骸」なので記録しない
+        # （push フェーズの needsAction 戻しが失敗した場合の二重防御）。
+        undo = _undo_time(conn, today, tid)
+        if undo is not None:
+            g_completed = _parse_google_ts(g.get("completed"))
+            if g_completed is None or g_completed <= undo:
+                continue
         # statuses はループ前のスナップショットのため、UI の complete と同時実行
         # されると二重記録になりうる。BEGIN IMMEDIATE で書き込みロックを取り、
         # 当日記録の有無を確認してから挿入する（_record_action と同じ規則）。
@@ -768,6 +834,7 @@ def _sync_chores(
         try:
             dup = conn.execute(
                 "SELECT 1 FROM completions WHERE task_id = ? "
+                "AND action IN ('done', 'skip') "
                 "AND completed_at >= ? AND completed_at < ? LIMIT 1",
                 (tid, day_start, day_end),
             ).fetchone()
