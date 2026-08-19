@@ -26,7 +26,8 @@ data/client_secret.json が見つかりません: {gtasks.CLIENT_SECRET_PATH}
 Google Cloud Console で OAuth クライアントを作成して配置してください:
 
   1. https://console.cloud.google.com/ でプロジェクトを作成（既存でも可）
-  2. 「APIとサービス」→「ライブラリ」で Google Tasks API を検索して有効化
+  2. 「APIとサービス」→「ライブラリ」で Google Tasks API と
+     Google Calendar API を検索して有効化
   3. 「APIとサービス」→「認証情報」→「認証情報を作成」→「OAuth クライアント ID」
      - 同意画面が未設定なら先に設定する（外部・テストユーザーに自分の
        Google アカウントを追加）
@@ -45,6 +46,12 @@ def main() -> int:
 
     from google_auth_oauthlib.flow import InstalledAppFlow
 
+    if gtasks.TOKEN_PATH.exists():
+        print(
+            "既存のトークンが見つかりました。スコープ不足"
+            "（ゴミカレンダー連動の calendar.readonly 未同意など）の場合も、"
+            "このまま再同意すると新しいスコープで上書き保存されます。"
+        )
     print("ブラウザで Google アカウントの同意画面を開きます…")
     flow = InstalledAppFlow.from_client_secrets_file(
         str(gtasks.CLIENT_SECRET_PATH), gtasks.SCOPES

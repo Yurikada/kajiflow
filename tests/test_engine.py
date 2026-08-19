@@ -211,6 +211,47 @@ class TestBuildPlanInterval:
         assert engine.build_plan([t1, t2], [], MONDAY, 30) == []
 
 
+# ---------------------------------------------------------------- build_plan: calendar 判定（v4）
+
+class TestBuildPlanCalendar:
+    def _cal(self, id: int, **overrides) -> dict:
+        return make_task(id, schedule_type="calendar", interval_days=None,
+                         adaptive=0, **overrides)
+
+    def test_included_only_when_in_gomi_due(self):
+        task = self._cal(1)
+        assert engine.build_plan([task], [], MONDAY, 30, gomi_due={1}) == [1]
+        # gomi_due に無ければ常に対象外（urgency では絶対に入らない）
+        assert engine.build_plan([task], [], MONDAY, 30, gomi_due=set()) == []
+        assert engine.build_plan([task], [], MONDAY, 30) == []
+
+    def test_placed_before_weekly_and_interval(self):
+        cal9 = self._cal(9, est_minutes=5)
+        w2 = make_task(2, schedule_type="weekly", interval_days=None,
+                       weekdays="0", est_minutes=5)
+        i1 = make_task(1, interval_days=3, adaptive=0, est_minutes=5)
+        history = [done(1, jst(2025, 5, 28, 0, 0))]
+        plan = engine.build_plan([i1, w2, cal9], history, MONDAY, 120, gomi_due={9})
+        assert plan == [9, 2, 1]  # calendar → weekly → interval
+
+    def test_excluded_if_done_today(self):
+        task = self._cal(1)
+        history = [done(1, jst(2025, 6, 2, 8, 0))]
+        assert engine.build_plan([task], history, MONDAY, 30, gomi_due={1}) == []
+
+    def test_disabled_excluded(self):
+        task = self._cal(1, enabled=0)
+        assert engine.build_plan([task], [], MONDAY, 30, gomi_due={1}) == []
+
+    def test_est_minutes_counted_into_budget(self):
+        # calendar の est_minutes も予算に算入される（先頭配置なので必ず入る）
+        cal = self._cal(1, est_minutes=25)
+        w2 = make_task(2, schedule_type="weekly", interval_days=None,
+                       weekdays="0", est_minutes=10)
+        plan = engine.build_plan([cal, w2], [], MONDAY, 30, gomi_due={1})
+        assert plan == [1]  # 25 + 10 > 30 で weekly が入らない
+
+
 # ---------------------------------------------------------------- build_plan: 並び順
 
 class TestBuildPlanOrder:

@@ -24,7 +24,7 @@ import re
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from . import vault
@@ -36,13 +36,28 @@ from .engine import JST
 DATA_DIR = PROJECT_ROOT / "data"
 CLIENT_SECRET_PATH = DATA_DIR / "client_secret.json"   # 初回認証（scripts/gtasks_auth.py）用
 TOKEN_PATH = DATA_DIR / "gtasks_token.json"
-SCOPES = ["https://www.googleapis.com/auth/tasks"]
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+SCOPES = [
+    "https://www.googleapis.com/auth/tasks",
+    CALENDAR_SCOPE,  # ゴミカレンダー連動（v4）
+]
 
 VAULT_LIST_TITLE = "Vault タスク"
 CHORE_LIST_TITLE = "KajiFlow 家事"
 SYNC_MARK = "(KajiFlow同期)"
 
 AUTH_HINT = "Google Tasks は未認証です。scripts/gtasks_auth.py を実行してください"
+CALENDAR_REAUTH_HINT = (
+    "カレンダー連動には再認証が必要です。"
+    "scripts/gtasks_auth.py を再実行してください"
+)
+
+# ゴミカレンダー連動: 対象カレンダー ID の settings キーと取得期間（日数）
+GOMI_CALENDAR_SETTING = "gcal_gomi_calendar_id"
+GOMI_WINDOW_DAYS = 7
+GOMI_TASK_PREFIX = "ゴミ出し: "
+GOMI_CATEGORY = "ゴミ"
+GOMI_EST_MINUTES = 5
 
 # notes 先頭行の uid マーカー（例: `uid: 0123abcd…` / `uid: T2026…`）
 UID_LINE_RE = re.compile(r"^uid: (\S+)$", re.MULTILINE)
@@ -91,17 +106,22 @@ class GTasksClient:
     - insert_task(list_id, body) -> dict    body: title/notes/status/due
     - patch_task(list_id, gtask_id, body) -> dict   部分更新（due=None はクリア）
     - delete_task(list_id, gtask_id) -> None        404 は成功扱い（冪等）
+    - list_gomi_events(calendar_id, start_date, end_date) -> list[dict]
+        期間 [start_date, end_date]（両端含む）の終日イベントのみ。
+        各 {"date": "YYYY-MM-DD", "summary": str}。
+        スコープ不足（RefreshError / 403）は GTasksAuthError（再認証案内）。
 
     失敗は GTasksError 系で送出する（認証切れは GTasksAuthError）。
     """
 
     def __init__(self) -> None:
-        creds = self._load_credentials()
+        self._creds = self._load_credentials()
         from googleapiclient.discovery import build
 
         self._service = build(
-            "tasks", "v1", credentials=creds, cache_discovery=False
+            "tasks", "v1", credentials=self._creds, cache_discovery=False
         )
+        self._calendar_service = None  # calendar v3 は必要になるまで作らない
 
     @staticmethod
     def _load_credentials():
@@ -111,7 +131,13 @@ class GTasksClient:
         from google.oauth2.credentials import Credentials
 
         try:
-            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
+            # scopes は指定せず、token 保存時に同意済みのスコープのまま読み込む。
+            # 新 SCOPES（calendar.readonly 込み）を強制すると、v3 時代の
+            # tasks のみの token では refresh が invalid_scope で落ちて
+            # GTasksClient の生成自体が失敗し、家事・Vault 同期まで巻き込んで
+            # 503 になる。SPEC はスコープ不足時「カレンダー取得だけを諦めて
+            # warnings」を要求するため、不足判定は list_gomi_events 側で行う。
+            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH))
         except Exception:
             raise GTasksAuthError(
                 f"{AUTH_HINT}（{TOKEN_PATH.name} を読み取れません）"
@@ -208,6 +234,82 @@ class GTasksClient:
             raise GTasksApiError(f"Tasks API の削除に失敗しました（HTTP {status}）")
         except Exception as e:
             raise GTasksApiError(f"Tasks API との通信に失敗しました（{e}）")
+
+    # -------------------------------------------------- calendar（ゴミカレンダー）
+
+    def list_gomi_events(
+        self, calendar_id: str, start_date: date, end_date: date
+    ) -> list[dict]:
+        """期間 [start_date, end_date]（両端含む）の終日イベントを返す。
+
+        calendar v3 events.list（singleEvents=true で繰り返しを展開）。
+        終日イベント（start.date を持つもの）のみ対象とし、
+        各 {"date": "YYYY-MM-DD", "summary": str} に正規化する。
+        スコープ不足（RefreshError / HTTP 401・403）は GTasksAuthError
+        （再認証案内）、その他の失敗は GTasksApiError。
+        """
+        # v3 時代の tasks のみの token はネットワークを叩く前に再認証案内で
+        # 劣化させる（呼び出し側が warnings に集約する）。token に scopes の
+        # 記録が無い場合はここでは判定できないため API の 401/403 に任せる。
+        scopes = set(self._creds.scopes or [])
+        if scopes and CALENDAR_SCOPE not in scopes:
+            raise GTasksAuthError(CALENDAR_REAUTH_HINT)
+        if self._calendar_service is None:
+            from googleapiclient.discovery import build
+
+            self._calendar_service = build(
+                "calendar", "v3", credentials=self._creds, cache_discovery=False
+            )
+        from google.auth.exceptions import RefreshError
+        from googleapiclient.errors import HttpError
+
+        time_min = datetime.combine(start_date, time.min, tzinfo=JST).isoformat()
+        time_max = datetime.combine(
+            end_date + timedelta(days=1), time.min, tzinfo=JST
+        ).isoformat()
+        items: list[dict] = []
+        page_token = None
+        while True:
+            try:
+                resp = (
+                    self._calendar_service.events()
+                    .list(
+                        calendarId=calendar_id,
+                        timeMin=time_min,
+                        timeMax=time_max,
+                        singleEvents=True,
+                        orderBy="startTime",
+                        maxResults=250,
+                        pageToken=page_token,
+                    )
+                    .execute()
+                )
+            except RefreshError:
+                # 既存 token がスコープ不足（calendar.readonly 未同意）だと
+                # refresh が invalid_scope で落ちる。再認証で解消する。
+                raise GTasksAuthError(CALENDAR_REAUTH_HINT)
+            except HttpError as e:
+                status = getattr(getattr(e, "resp", None), "status", None)
+                if status in (401, 403):
+                    raise GTasksAuthError(CALENDAR_REAUTH_HINT)
+                raise GTasksApiError(
+                    f"Calendar API 呼び出しに失敗しました（HTTP {status}）"
+                )
+            except GTasksError:
+                raise
+            except Exception as e:
+                raise GTasksApiError(f"Calendar API との通信に失敗しました（{e}）")
+            items.extend(resp.get("items", []))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        events: list[dict] = []
+        for ev in items:
+            d = (ev.get("start") or {}).get("date")  # 終日イベントのみ date を持つ
+            summary = (ev.get("summary") or "").strip()
+            if d and summary:
+                events.append({"date": d, "summary": summary})
+        return events
 
 
 def build_client() -> GTasksClient:
@@ -341,6 +443,64 @@ def _delete_link(conn: sqlite3.Connection, kind: str, local_id: str) -> None:
     conn.execute(
         "DELETE FROM gtasks_links WHERE kind = ? AND local_id = ?", (kind, local_id)
     )
+
+
+# ---------------------------------------------------------------- sync: gomi calendar
+
+def _sync_gomi_events(conn: sqlite3.Connection, client, now: datetime, result: dict) -> None:
+    """SPEC「ゴミカレンダー連動（v4）」: gomi_events 洗い替え + 合成タスク upsert。
+
+    - settings の gcal_gomi_calendar_id が空なら機能全体を無効（何もしない）。
+    - 対象カレンダーの [今日, 今日+7日] の終日イベントを取得し、この期間の行を
+      洗い替える（期間外の過去行も削除）。
+    - 取得失敗（スコープ不足の GTasksAuthError 含む）は warnings に集約して
+      同期継続。家事・Vault 同期は従来どおり動く。
+    - 各 summary について「ゴミ出し: {summary}」の task 行を upsert
+      （category='ゴミ', est_minutes=5, schedule_type='calendar',
+      adaptive=0, enabled=1）。既存同名はそのまま。イベントに現れなくなっても
+      task 行は消さない（プランに出なくなるだけ）。
+    """
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = ?", (GOMI_CALENDAR_SETTING,)
+    ).fetchone()
+    calendar_id = (row["value"] or "").strip() if row else ""
+    if not calendar_id:
+        return
+
+    today = now.astimezone(JST).date()
+    end = today + timedelta(days=GOMI_WINDOW_DAYS)
+    try:
+        events = client.list_gomi_events(calendar_id, today, end)
+    except GTasksError as e:
+        result["warnings"].append(f"ゴミカレンダーの取得に失敗しました: {e}")
+        return
+
+    # 洗い替え: 取得期間の行を入れ替え、期間外の過去行も削除する。
+    # （窓は常に [今日, 今日+7日] なので end より先の行は存在しない）
+    conn.execute("DELETE FROM gomi_events WHERE date <= ?", (end.isoformat(),))
+    for ev in events:
+        conn.execute(
+            "INSERT OR IGNORE INTO gomi_events (date, summary) VALUES (?, ?)",
+            (ev["date"], ev["summary"]),
+        )
+
+    # 合成タスクの upsert（既存同名の schedule_type='calendar' はそのまま）
+    for summary in sorted({ev["summary"] for ev in events}):
+        name = f"{GOMI_TASK_PREFIX}{summary}"
+        exists = conn.execute(
+            "SELECT 1 FROM tasks WHERE name = ? AND schedule_type = 'calendar' LIMIT 1",
+            (name,),
+        ).fetchone()
+        if exists:
+            continue
+        conn.execute(
+            "INSERT INTO tasks (name, category, est_minutes, schedule_type, "
+            "interval_days, weekdays, adaptive, enabled, notes, created_at) "
+            "VALUES (?, ?, ?, 'calendar', NULL, NULL, 0, 1, '', ?)",
+            (name, GOMI_CATEGORY, GOMI_EST_MINUTES,
+             now.astimezone(JST).isoformat()),
+        )
+    conn.commit()
 
 
 # ---------------------------------------------------------------- sync: vault
@@ -619,7 +779,7 @@ def _sync_chores(
 # ---------------------------------------------------------------- sync_all
 
 def sync_all(conn: sqlite3.Connection, client, now: datetime) -> dict:
-    """全体調停。vault 4項目 + chore 2項目を実行して結果を返す。
+    """全体調停。冒頭のゴミカレンダー連動 + vault 4項目 + chore 2項目を実行して結果を返す。
 
     - client は GTasksClient と同じメソッド契約を持つオブジェクト（注入可能）。
     - now は aware datetime（「今日」は Asia/Tokyo で判定）。
@@ -640,6 +800,10 @@ def sync_all(conn: sqlite3.Connection, client, now: datetime) -> dict:
         "new_from_google": 0,
         "warnings": [],
     }
+
+    # ゴミカレンダー連動（v4）: gomi_events 洗い替え + 合成タスク upsert。
+    # スコープ不足・取得失敗は warnings に集約して以降の同期を継続する。
+    _sync_gomi_events(conn, client, now, result)
 
     # まず Vault 正本を DB に反映する（前回 pull 新規で追記した分の uid も
     # ここで vault_tasks に載り、push でリンク済みタスクとして収束する）。

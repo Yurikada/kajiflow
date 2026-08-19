@@ -13,7 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "kajiflow.db"
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS gtasks_links (
   synced_at TEXT,
   PRIMARY KEY (kind, local_id)
 );
+
+CREATE TABLE IF NOT EXISTS gomi_events (
+  date TEXT,
+  summary TEXT,
+  PRIMARY KEY (date, summary)
+);
 """
 
 
@@ -115,7 +121,8 @@ def migrate(conn: sqlite3.Connection) -> None:
     """user_version ベースの簡易マイグレーション。"""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
-        # v2: vault_tasks 追加 / v3: gtasks_links 追加。テーブル作成自体は
+        # v2: vault_tasks 追加 / v3: gtasks_links 追加 / v4: gomi_events 追加。
+        # テーブル作成自体は
         # SCHEMA_SQL の CREATE TABLE IF NOT EXISTS が既存 DB にも冪等に
         # 適用する。将来のスキーマ変更はここに version 判定で追加する
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

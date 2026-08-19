@@ -266,6 +266,37 @@ Google API はネットワークを一切叩かない。`app/gtasks.py` は Task
 - codex / claude からの操作面: kajiflow REST API（/api/vault/tasks で分類・指示文取得、/api/gtasks/sync で同期発火）。Google 認証情報はエージェントに渡さない。
 - kajiflow/CLAUDE.md と AGENTS.md に API 一覧と「Google Tasks へ直接アクセスしない」規約を追記する。
 
+## ゴミカレンダー連動（v4）
+
+ユーザーの Google カレンダー「ゴミカレンダー」を正本として、収集日当日の日次プランへ「ゴミ出し: {種別}」タスクを自動注入する。収集パターンは隔週・月1が混在し weekly では表現できないため、カレンダーのイベントそのものに追従する。
+
+### 認証・スコープ
+
+- OAuth スコープに `https://www.googleapis.com/auth/calendar.readonly` を追加（`app/gtasks.py` の SCOPES と `scripts/gtasks_auth.py` の両方）。既存トークンはスコープ不足になるため、再認証が必要（gtasks_auth.py を再実行）。
+- スコープ不足・未認証時: カレンダー取得だけを諦めて warnings に「カレンダー連動には再認証が必要です。scripts/gtasks_auth.py を再実行してください」を出す。家事・Vault 同期は従来どおり動く。
+
+### データ・設定
+
+- settings: `gcal_gomi_calendar_id`（対象カレンダー ID。空なら機能全体を無効）。
+- 新テーブル `gomi_events(date TEXT, summary TEXT, PRIMARY KEY(date, summary))`。
+- 取得: `sync_all()` の冒頭で、対象カレンダーの `[今日, 今日+7日]` の終日イベントを取得し、この期間の行を洗い替える（期間外の過去行は削除）。取得失敗は warnings 集約で同期継続。イベント取得は googleapiclient の calendar v3 を GTasksClient と同じ薄いラッパ（`list_gomi_events(calendar_id, start, end)`）として実装し、テストではフェイク注入。
+
+### 合成タスク（schedule_type='calendar'）
+
+- gomi_events に現れた各 summary について、`ゴミ出し: {summary}` という名前の task 行を upsert する（category='ゴミ', est_minutes=5, schedule_type='calendar', adaptive=0, enabled=1）。既存同名はそのまま。イベントに現れなくなっても task 行は消さない（enabled のまま。プランに出なくなるだけ）。
+- ユーザー API からの schedule_type='calendar' の作成・変更は 422（システム管理のため）。削除・enabled トグルは可。
+- `build_plan`: schedule_type='calendar' のタスクは「plan_date に対応する gomi_events 行が存在する場合のみ」対象とし、**weekly より前（プラン先頭）**に置く（出し忘れが最も時刻制約が強いため）。urgency・予算充填の対象外とせず、est_minutes は予算に算入する（ただし先頭配置なので必ず入る）。adaptive 学習はしない。
+- engine の純関数性維持: build_plan には gomi summary→当日該当の集合を引数で渡す（DB 参照を engine に持ち込まない）。
+
+### UI
+
+- manage のタスク一覧で schedule_type='calendar' は「カレンダー連動」とラベル表示（scheduleLabel を拡張）。編集フォームでは名前・分数・メモのみ変更可能扱いで良い（schedule 種別変更は 422 になる）。
+- 特別な設定 UI は作らない（calendar_id は settings API で設定済みとする）。
+
+### テスト
+
+フェイクのカレンダーイベントで: 当日該当日のみプラン注入・先頭配置、gomi_events 洗い替えの冪等性、weekly/interval との並び順、calendar タスクの API 422、カレンダー取得失敗時の warnings 継続、re-auth 必要時の warnings。
+
 ## 非スコープ（今回作らない）
 
 - 認証・マルチユーザー・家族共有

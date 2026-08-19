@@ -103,16 +103,24 @@ def build_plan(
     history: list[dict],
     plan_date: date,
     budget_min: int,
+    gomi_due: set[int] | None = None,
 ) -> list[int]:
     """当日プラン（task_id のリスト、提示順）を組み立てる。
 
-    - 対象: weekly は「plan_date が該当曜日かつ当日 'done' 未記録」、
-      interval は urgency >= 1.0（urgency は plan_date の終端時点で評価）。
-    - 並び順: weekly を先頭（登録順=id 順）、次に interval を urgency 降順。
+    - 対象: calendar は「id が gomi_due に含まれ、当日 'done' 未記録」
+      （gomi_due に無ければ常に対象外）、weekly は「plan_date が該当曜日
+      かつ当日 'done' 未記録」、interval は urgency >= 1.0
+      （urgency は plan_date の終端時点で評価）。
+    - 並び順: calendar を先頭（ゴミ出しは時刻制約が最も強い。id 順）、
+      次に weekly（登録順=id 順）、次に interval を urgency 降順。
     - 予算充填: est_minutes を積み budget_min を超える手前まで。1件目は必ず入れる。
+      calendar タスクも est_minutes を予算に算入する（先頭配置なので必ず入る）。
     - 対象ゼロなら空リスト。
     - skip は対象判定・学習のどちらにも影響しない。
+    - gomi_due: 当日該当（gomi_events に plan_date の行がある）calendar
+      タスクの id 集合。DB 参照は呼び出し側が行い、純関数性を保つ。
     """
+    gomi_due = gomi_due or set()
     # urgency の基準時刻: plan_date の終端（翌日 0:00 JST）。
     # その日のうちに期限が来るタスクを当日プランに含めるため。
     now = datetime.combine(plan_date + timedelta(days=1), time(0, 0), tzinfo=JST)
@@ -130,13 +138,22 @@ def build_plan(
         if dt.astimezone(JST).date().isoformat() == date_str:
             done_today.add(tid)
 
+    calendar_part: list[dict] = []
     weekly_part: list[dict] = []
     interval_part: list[tuple[float, int, dict]] = []
 
     for task in tasks:
         if not task.get("enabled", 1):
             continue
-        if task.get("schedule_type") == "weekly":
+        if task.get("schedule_type") == "calendar":
+            # カレンダー連動: 当日該当（gomi_due）でなければ常に対象外。
+            # urgency 評価・adaptive 学習はしない。
+            if task["id"] not in gomi_due:
+                continue
+            if task["id"] in done_today:
+                continue
+            calendar_part.append(task)
+        elif task.get("schedule_type") == "weekly":
             if plan_date.weekday() not in parse_weekdays(task.get("weekdays")):
                 continue
             if task["id"] in done_today:
@@ -151,11 +168,13 @@ def build_plan(
             if u >= 1.0:
                 interval_part.append((u, task["id"], task))
 
-    # weekly: 登録順（id 昇順）、interval: urgency 降順（同値は id 昇順で決定的に）
+    # calendar / weekly: 登録順（id 昇順）、interval: urgency 降順
+    # （同値は id 昇順で決定的に）
+    calendar_part.sort(key=lambda t: t["id"])
     weekly_part.sort(key=lambda t: t["id"])
     interval_part.sort(key=lambda x: (-x[0], x[1]))
 
-    ordered = weekly_part + [t for _, _, t in interval_part]
+    ordered = calendar_part + weekly_part + [t for _, _, t in interval_part]
     if not ordered:
         return []
 

@@ -79,10 +79,12 @@ function setWeekdays(weekdays) {
 }
 
 function updateScheduleVisibility() {
-  const isWeekly = $("f-schedule-type").value === "weekly";
-  $("f-interval-wrap").hidden = isWeekly;
+  const st = $("f-schedule-type").value;
+  const isWeekly = st === "weekly";
+  const isCalendar = st === "calendar";
+  $("f-interval-wrap").hidden = isWeekly || isCalendar;
   $("f-weekdays-wrap").hidden = !isWeekly;
-  $("f-adaptive-wrap").hidden = isWeekly;
+  $("f-adaptive-wrap").hidden = isWeekly || isCalendar;
 }
 
 function resetForm() {
@@ -91,6 +93,7 @@ function resetForm() {
   $("f-category").value = "その他";
   $("f-minutes").value = "10";
   $("f-schedule-type").value = "interval";
+  $("f-schedule-type").disabled = false;
   $("f-interval").value = "3";
   setWeekdays("");
   $("f-adaptive").checked = true;
@@ -114,6 +117,9 @@ function startEdit(task) {
   }
   $("f-minutes").value = String(task.est_minutes);
   $("f-schedule-type").value = task.schedule_type;
+  // カレンダー連動タスクは種別変更不可（API が 422 を返す）。
+  // 名前・分数・メモの編集は可能なので、種別だけ操作不能にする。
+  $("f-schedule-type").disabled = task.schedule_type === "calendar";
   $("f-interval").value = task.interval_days != null ? String(task.interval_days) : "3";
   setWeekdays(task.weekdays);
   $("f-adaptive").checked = Boolean(task.adaptive);
@@ -130,17 +136,23 @@ $("f-cancel").addEventListener("click", resetForm);
 
 $("task-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const isWeekly = $("f-schedule-type").value === "weekly";
+  const st = $("f-schedule-type").value;
+  const isWeekly = st === "weekly";
+  const isCalendar = st === "calendar";
   const body = {
     name: $("f-name").value.trim(),
     category: $("f-category").value,
     est_minutes: parseInt($("f-minutes").value, 10) || 10,
-    schedule_type: isWeekly ? "weekly" : "interval",
-    interval_days: isWeekly ? null : parseFloat($("f-interval").value),
-    weekdays: isWeekly ? readWeekdays() : null,
-    adaptive: $("f-adaptive").checked ? 1 : 0,
     notes: $("f-notes").value.trim(),
   };
+  if (!isCalendar) {
+    // カレンダー連動はシステム管理のため schedule 系フィールドを送らない
+    // （PUT は部分更新なので種別・間隔・曜日・adaptive はそのまま保たれる）
+    body.schedule_type = isWeekly ? "weekly" : "interval";
+    body.interval_days = isWeekly ? null : parseFloat($("f-interval").value);
+    body.weekdays = isWeekly ? readWeekdays() : null;
+    body.adaptive = $("f-adaptive").checked ? 1 : 0;
+  }
   if (isWeekly && !body.weekdays) {
     showToast("曜日を1つ以上選んでください");
     return;

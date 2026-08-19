@@ -33,7 +33,13 @@ SETTINGS_DEFAULTS: dict[str, str] = {
     "ntfy_token": "",
 }
 
-VALID_SCHEDULE_TYPES = ("interval", "weekly")
+# 'calendar' はシステム管理（gtasks 同期が upsert）。ユーザー API からの
+# 作成・変更は 422（validate_task_fields / api_tasks_update 参照）。
+VALID_SCHEDULE_TYPES = ("interval", "weekly", "calendar")
+CALENDAR_TYPE_ERROR = (
+    "schedule_type='calendar' はシステム管理のため作成・変更できません"
+    "（ゴミカレンダー連動が自動生成します）"
+)
 
 
 # ---------------------------------------------------------------- helpers
@@ -88,11 +94,29 @@ def get_budget_min(conn: sqlite3.Connection) -> int:
         return 30
 
 
+def fetch_gomi_due(conn: sqlite3.Connection, d: date, tasks: list[dict]) -> set[int]:
+    """その日の gomi_events に該当する calendar タスクの id 集合を返す。
+
+    gomi_events の summary と「ゴミ出し: {summary}」の名前一致で対応づける
+    （gtasks の合成タスク upsert と同じ規則）。engine は DB を参照しない
+    純関数のため、ここで集合に組み立てて build_plan へ渡す。
+    """
+    rows = conn.execute(
+        "SELECT summary FROM gomi_events WHERE date = ?", (d.isoformat(),)
+    ).fetchall()
+    names = {f"{gtasks.GOMI_TASK_PREFIX}{r['summary']}" for r in rows}
+    return {
+        t["id"] for t in tasks
+        if t.get("schedule_type") == "calendar" and t["name"] in names
+    }
+
+
 def compute_plan(conn: sqlite3.Connection, d: date) -> list[int]:
     """現在の tasks / completions からその日のプランを計算する（保存はしない）。"""
     tasks = [t for t in fetch_tasks(conn) if t["enabled"]]
     history = fetch_history(conn)
-    return engine.build_plan(tasks, history, d, get_budget_min(conn))
+    gomi_due = fetch_gomi_due(conn, d, tasks)
+    return engine.build_plan(tasks, history, d, get_budget_min(conn), gomi_due=gomi_due)
 
 
 def ensure_today_plan(conn: sqlite3.Connection, d: date | None = None) -> list[int]:
@@ -172,9 +196,10 @@ def validate_task_fields(data: dict) -> str | None:
         iv = data.get("interval_days")
         if iv is None or float(iv) <= 0:
             return "interval タスクには 1 以上の interval_days が必要です"
-    else:
+    elif st == "weekly":
         if not engine.parse_weekdays(data.get("weekdays")):
             return "weekly タスクには weekdays（例: '0,3'、月=0〜日=6）が必要です"
+    # calendar は追加条件なし（システム管理。作成・変更拒否は API 層で行う）
     return None
 
 
@@ -355,6 +380,8 @@ def _insert_task(conn: sqlite3.Connection, data: dict) -> dict:
 @app.post("/api/tasks", status_code=201)
 def api_tasks_create(payload: TaskCreate) -> dict:
     data = payload.model_dump()
+    if data.get("schedule_type") == "calendar":
+        raise HTTPException(status_code=422, detail=CALENDAR_TYPE_ERROR)
     error = validate_task_fields(data)
     if error:
         raise HTTPException(status_code=422, detail=error)
@@ -380,6 +407,11 @@ def api_tasks_update(task_id: int, payload: TaskUpdate) -> dict:
         if task is None:
             raise HTTPException(status_code=404, detail="タスクが見つかりません")
         updates = payload.model_dump(exclude_unset=True)
+        # schedule_type='calendar' への変更・からの変更はシステム管理のため 422。
+        # calendar タスク自体の名前・分数・メモ等の編集や enabled トグルは可。
+        if "schedule_type" in updates and updates["schedule_type"] != task["schedule_type"]:
+            if "calendar" in (updates["schedule_type"], task["schedule_type"]):
+                raise HTTPException(status_code=422, detail=CALENDAR_TYPE_ERROR)
         merged = {**task, **updates}
         error = validate_task_fields(merged)
         if error:

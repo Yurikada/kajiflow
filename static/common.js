@@ -127,6 +127,9 @@ function weekdaysToLabel(weekdays) {
 
 /** タスクのスケジュール説明文 */
 function scheduleLabel(task) {
+  if (task.schedule_type === "calendar") {
+    return "カレンダー連動";
+  }
   if (task.schedule_type === "weekly") {
     return `毎週 ${weekdaysToLabel(task.weekdays)}`;
   }

@@ -154,6 +154,97 @@ class TestTaskCrud:
         assert res.status_code == 422
 
 
+# ---------------------------------------------------------------- calendar タスク（v4）
+
+def insert_calendar_task(raw_conn, name: str) -> int:
+    """gtasks 同期の合成タスク相当を直接 DB に作る（システム管理経路の模擬）。"""
+    conn = raw_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO tasks (name, category, est_minutes, schedule_type, "
+            "interval_days, weekdays, adaptive, enabled, notes, created_at) "
+            "VALUES (?, 'ゴミ', 5, 'calendar', NULL, NULL, 0, 1, '', ?)",
+            (name, datetime.now(JST).isoformat()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def insert_gomi_event(raw_conn, date_str: str, summary: str) -> None:
+    conn = raw_conn()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO gomi_events (date, summary) VALUES (?, ?)",
+            (date_str, summary),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestCalendarTasks:
+    def test_create_calendar_type_is_422(self, client):
+        res = client.post("/api/tasks", json={
+            "name": "ゴミ出し: 燃えるゴミ", "schedule_type": "calendar",
+        })
+        assert res.status_code == 422
+        assert "システム管理" in res.json()["detail"]
+
+    def test_change_to_calendar_is_422(self, client):
+        task = create_task(client)
+        res = client.put(
+            f"/api/tasks/{task['id']}", json={"schedule_type": "calendar"}
+        )
+        assert res.status_code == 422
+        assert "システム管理" in res.json()["detail"]
+
+    def test_change_from_calendar_is_422(self, client, raw_conn):
+        tid = insert_calendar_task(raw_conn, "ゴミ出し: 燃えるゴミ")
+        res = client.put(f"/api/tasks/{tid}", json={
+            "schedule_type": "weekly", "weekdays": "0",
+        })
+        assert res.status_code == 422
+
+    def test_edit_name_minutes_notes_allowed(self, client, raw_conn):
+        # 編集フォーム相当: 名前・分数・メモの変更は可（種別はそのまま）
+        tid = insert_calendar_task(raw_conn, "ゴミ出し: 燃えるゴミ")
+        res = client.put(f"/api/tasks/{tid}", json={
+            "name": "ゴミ出し: 可燃", "est_minutes": 10, "notes": "8時まで",
+        })
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["name"] == "ゴミ出し: 可燃"
+        assert body["est_minutes"] == 10
+        assert body["schedule_type"] == "calendar"
+
+    def test_toggle_and_delete_allowed(self, client, raw_conn):
+        tid = insert_calendar_task(raw_conn, "ゴミ出し: 燃えるゴミ")
+        res = client.put(f"/api/tasks/{tid}", json={"enabled": 0})
+        assert res.status_code == 200
+        assert res.json()["enabled"] == 0
+        assert client.delete(f"/api/tasks/{tid}").status_code == 200
+
+    def test_plan_injects_calendar_task_at_head_on_due_day(self, client, raw_conn):
+        # 当日該当の calendar タスクは weekly より前（プラン先頭）に入る。
+        # gomi_events に無い calendar タスクは対象外。
+        weekly = create_task(
+            client, name="毎週の家事", schedule_type="weekly",
+            interval_days=None, weekdays=str(today_weekday()),
+        )
+        due_id = insert_calendar_task(raw_conn, "ゴミ出し: 燃えるゴミ")
+        insert_calendar_task(raw_conn, "ゴミ出し: 古紙")  # 当日該当なし
+        today = datetime.now(JST).date().isoformat()
+        insert_gomi_event(raw_conn, today, "燃えるゴミ")
+
+        res = client.post("/api/plan/regenerate")
+        assert res.status_code == 200
+        items = client.get("/api/today").json()["items"]
+        ids = [it["task"]["id"] for it in items]
+        assert ids == [due_id, weekly["id"]]
+
+
 # ---------------------------------------------------------------- next → complete → next
 
 class TestNextCompleteFlow:

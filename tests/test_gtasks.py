@@ -96,6 +96,10 @@ class FakeGTasksClient:
         self._tasks: dict[str, dict[str, dict]] = {}
         self._seq = 0
         self.mutations: list[tuple] = []
+        # ゴミカレンダー（v4）: テストが直接詰める全期間のイベント
+        # [{"date": "YYYY-MM-DD", "summary": str}, ...]
+        self.gomi_events: list[dict] = []
+        self.gomi_calls: list[tuple] = []
 
     def _new_id(self, prefix: str) -> str:
         self._seq += 1
@@ -140,6 +144,11 @@ class FakeGTasksClient:
             self.mutations.append(("delete_task", list_id, gtask_id))
         # 既に無い場合は 404 相当 → 成功扱い（冪等）
 
+    def list_gomi_events(self, calendar_id, start_date, end_date) -> list[dict]:
+        self.gomi_calls.append((calendar_id, start_date, end_date))
+        lo, hi = start_date.isoformat(), end_date.isoformat()
+        return [dict(ev) for ev in self.gomi_events if lo <= ev["date"] <= hi]
+
     # ---------------- テスト補助
 
     def list_id_of(self, title: str) -> str | None:
@@ -177,6 +186,17 @@ class FakeGTasksClient:
 
     def snapshot(self) -> dict:
         return copy.deepcopy(self._tasks)
+
+
+class GomiFailingClient(FakeGTasksClient):
+    """list_gomi_events だけ失敗するフェイク（warnings 継続の検証用）。"""
+
+    def __init__(self, exc: Exception) -> None:
+        super().__init__()
+        self.exc = exc
+
+    def list_gomi_events(self, calendar_id, start_date, end_date) -> list[dict]:
+        raise self.exc
 
 
 class InsertFailingClient(FakeGTasksClient):
@@ -856,6 +876,178 @@ class TestChores:
         assert len(chores) == 1  # 前日タスクは Google 側から消えている
         assert chores[0]["due"] == f"{today_str()}T00:00:00.000Z"
         assert chores[0]["status"] == "needsAction"
+
+
+# ---------------------------------------------------------------- gomi calendar（v4）
+
+def set_gomi_calendar(conn, calendar_id: str = "gomi@example.com") -> str:
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (gtasks.GOMI_CALENDAR_SETTING, calendar_id),
+    )
+    conn.commit()
+    return calendar_id
+
+
+def gomi_rows(conn) -> set[tuple[str, str]]:
+    return {
+        (r["date"], r["summary"])
+        for r in conn.execute("SELECT date, summary FROM gomi_events").fetchall()
+    }
+
+
+def calendar_tasks(conn) -> list[dict]:
+    return [
+        dict(r) for r in conn.execute(
+            "SELECT * FROM tasks WHERE schedule_type = 'calendar' ORDER BY id"
+        ).fetchall()
+    ]
+
+
+class TestGomiCalendar:
+    def test_disabled_when_calendar_id_empty(self, vault_file, conn, fake):
+        # settings に calendar_id が無ければ機能全体が無効（取得もしない）
+        write_vault(vault_file)
+        result = run_sync(conn, fake)
+        assert result["warnings"] == []
+        assert fake.gomi_calls == []
+        assert gomi_rows(conn) == set()
+        assert calendar_tasks(conn) == []
+
+    def test_refresh_and_synthetic_task_upsert(self, vault_file, conn, fake):
+        write_vault(vault_file)
+        cid = set_gomi_calendar(conn)
+        today = today_str()
+        later = (now_jst() + timedelta(days=2)).date().isoformat()
+        fake.gomi_events = [
+            {"date": today, "summary": "燃えるゴミ"},
+            {"date": later, "summary": "プラスチック"},
+        ]
+
+        result = run_sync(conn, fake)
+
+        assert result["warnings"] == []
+        # [今日, 今日+7日] の窓で取得している
+        assert fake.gomi_calls == [
+            (cid, now_jst().date(), now_jst().date() + timedelta(days=7))
+        ]
+        assert gomi_rows(conn) == {
+            (today, "燃えるゴミ"), (later, "プラスチック"),
+        }
+        tasks = calendar_tasks(conn)
+        assert [t["name"] for t in tasks] == [
+            "ゴミ出し: プラスチック", "ゴミ出し: 燃えるゴミ",
+        ]
+        for t in tasks:
+            assert t["category"] == "ゴミ"
+            assert t["est_minutes"] == 5
+            assert t["schedule_type"] == "calendar"
+            assert t["adaptive"] == 0
+            assert t["enabled"] == 1
+
+    def test_refresh_is_idempotent(self, vault_file, conn, fake):
+        write_vault(vault_file)
+        set_gomi_calendar(conn)
+        fake.gomi_events = [{"date": today_str(), "summary": "燃えるゴミ"}]
+        run_sync(conn, fake)
+        rows_before = gomi_rows(conn)
+        tasks_before = calendar_tasks(conn)
+
+        result2 = run_sync(conn, fake)
+
+        assert_noop(result2)
+        assert gomi_rows(conn) == rows_before
+        assert calendar_tasks(conn) == tasks_before  # 既存同名はそのまま
+
+    def test_stale_rows_are_replaced(self, vault_file, conn, fake):
+        # 過去行・イベントから消えた期間内の行はどちらも洗い替えで消える。
+        # イベントに現れなくなっても task 行は消さない。
+        write_vault(vault_file)
+        set_gomi_calendar(conn)
+        fake.gomi_events = [{"date": today_str(), "summary": "燃えるゴミ"}]
+        run_sync(conn, fake)
+        yesterday = (now_jst() - timedelta(days=1)).date().isoformat()
+        conn.execute(
+            "INSERT INTO gomi_events (date, summary) VALUES (?, ?)",
+            (yesterday, "古紙"),
+        )
+        conn.commit()
+        fake.gomi_events = []  # カレンダー側からイベントが消えた
+
+        run_sync(conn, fake)
+
+        assert gomi_rows(conn) == set()
+        assert [t["name"] for t in calendar_tasks(conn)] == ["ゴミ出し: 燃えるゴミ"]
+
+    def test_fetch_failure_goes_to_warnings_and_sync_continues(
+        self, vault_file, conn
+    ):
+        write_vault(vault_file)
+        failing = GomiFailingClient(
+            gtasks.GTasksApiError("Calendar API 呼び出しに失敗しました（HTTP 500）")
+        )
+        set_gomi_calendar(conn)
+
+        result = run_sync(conn, failing)
+
+        assert any(
+            "ゴミカレンダーの取得に失敗しました" in w for w in result["warnings"]
+        )
+        assert result["pushed"] == 2  # vault 同期は従来どおり動く
+
+    def test_load_credentials_keeps_token_scopes(self, tmp_path, monkeypatch):
+        # v3 時代の tasks のみの token に新 SCOPES を強制しない。
+        # （from_authorized_user_file に SCOPES を渡すと refresh が
+        # invalid_scope で落ちて GTasksClient の生成自体が失敗し、
+        # 家事・Vault 同期まで巻き込んで 503 になる。SPEC は「カレンダー
+        # 取得だけを諦めて warnings」の劣化動作を要求している）
+        token = tmp_path / "gtasks_token.json"
+        token.write_text(json.dumps({
+            "token": "dummy-access-token",
+            "refresh_token": "dummy-refresh-token",
+            "client_id": "dummy-client-id",
+            "client_secret": "dummy-client-secret",
+            "scopes": ["https://www.googleapis.com/auth/tasks"],
+            "expiry": "2099-01-01T00:00:00Z",  # 未失効 → refresh せず返る
+        }), encoding="utf-8")
+        monkeypatch.setattr(gtasks, "TOKEN_PATH", token)
+
+        creds = gtasks.GTasksClient._load_credentials()
+
+        assert set(creds.scopes) == {"https://www.googleapis.com/auth/tasks"}
+
+    def test_list_gomi_events_scope_check_before_network(self):
+        # tasks のみのスコープでは Calendar API を呼ぶ前に再認証案内で落とす
+        # （calendar service を作らない = ネットワークに一切触れない）
+        class TasksOnlyCreds:
+            scopes = ["https://www.googleapis.com/auth/tasks"]
+
+        client = object.__new__(gtasks.GTasksClient)
+        client._creds = TasksOnlyCreds()
+        client._calendar_service = None
+
+        with pytest.raises(gtasks.GTasksAuthError) as ei:
+            client.list_gomi_events(
+                "gomi@example.com", now_jst().date(), now_jst().date()
+            )
+        assert gtasks.CALENDAR_REAUTH_HINT in str(ei.value)
+        assert client._calendar_service is None
+
+    def test_reauth_required_goes_to_warnings(self, vault_file, conn):
+        # スコープ不足（RefreshError / 403 相当）→ 再認証案内を warnings に集約
+        write_vault(vault_file)
+        failing = GomiFailingClient(
+            gtasks.GTasksAuthError(gtasks.CALENDAR_REAUTH_HINT)
+        )
+        set_gomi_calendar(conn)
+
+        result = run_sync(conn, failing)
+
+        assert any(
+            "カレンダー連動には再認証が必要です" in w for w in result["warnings"]
+        )
+        assert result["pushed"] == 2
 
 
 # ---------------------------------------------------------------- API

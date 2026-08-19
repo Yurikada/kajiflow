@@ -47,6 +47,9 @@
         <select id="f-schedule-type">
           <option value="interval" selected>間隔（◯日ごと）</option>
           <option value="weekly">曜日固定</option>
+          <!-- calendar はシステム管理（ゴミカレンダー連動）。編集時の表示専用で、
+               ユーザーは選択できない（startEdit がプログラムから設定する） -->
+          <option value="calendar" disabled hidden>カレンダー連動</option>
         </select>
       </div>
       <div class="field" id="f-interval-wrap">
