@@ -62,7 +62,13 @@ async function act(action) {
   els.btnDone.disabled = true;
   els.btnSkip.disabled = true;
   try {
-    render(await api(`/api/tasks/${currentTaskId}/${action}`, { method: "POST" }));
+    const res = await api(`/api/tasks/${currentTaskId}/${action}`, { method: "POST" });
+    // あとまわし: 最後尾へ回すだけで完了扱いにしない（skip と違い記録なし）。
+    // 残り1件のときは順序が変わらないことを案内する。
+    if (action === "defer" && res.deferred === false) {
+      showToast("残りはこれだけです");
+    }
+    render(res);
   } catch (e) {
     showToast(e.message);
   } finally {
@@ -73,7 +79,7 @@ async function act(action) {
 }
 
 els.btnDone.addEventListener("click", () => act("complete"));
-els.btnSkip.addEventListener("click", () => act("skip"));
+els.btnSkip.addEventListener("click", () => act("defer"));
 
 load();
 refreshOnReturn(load); // PWA 復帰・日付またぎで再取得

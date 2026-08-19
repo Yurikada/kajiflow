@@ -330,6 +330,48 @@ class TestNextCompleteFlow:
             conn.close()
         assert count == 1
 
+    def test_defer_moves_task_to_end_without_record(self, client, raw_conn):
+        """あとまわしは最後尾へ回すだけで completions に記録しない。"""
+        t1, t2 = self._setup_two_due_tasks(client, raw_conn)
+
+        res = client.post(f"/api/tasks/{t1['id']}/defer")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["deferred"] is True
+        assert body["task"]["id"] == t2["id"]  # 次の1件は t2 に進む
+        assert body["done_count"] == 0
+
+        # プラン順序: t2 → t1（t1 は消えず最後尾）
+        items = client.get("/api/today").json()["items"]
+        assert [i["task"]["id"] for i in items] == [t2["id"], t1["id"]]
+        assert all(i["status"] == "pending" for i in items)  # 記録なし
+
+        # t2 を完了すると t1 が戻ってくる（取り返しがつく）
+        body = client.post(f"/api/tasks/{t2['id']}/complete").json()
+        assert body["task"]["id"] == t1["id"]
+
+        conn = raw_conn()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM completions WHERE task_id = ?", (t1["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 0  # defer は記録を残さない
+
+    def test_defer_last_pending_reports_not_deferred(self, client, raw_conn):
+        t1, t2 = self._setup_two_due_tasks(client, raw_conn)
+        client.post(f"/api/tasks/{t2['id']}/complete")
+        body = client.post(f"/api/tasks/{t1['id']}/defer").json()
+        assert body["deferred"] is False
+        assert body["task"]["id"] == t1["id"]  # 残り1件なので先頭のまま
+
+    def test_defer_task_not_in_plan_is_409(self, client, raw_conn):
+        t1, _t2 = self._setup_two_due_tasks(client, raw_conn)
+        t3 = create_task(client, name="プラン外", interval_days=30)
+        res = client.post(f"/api/tasks/{t3['id']}/defer")
+        assert res.status_code == 409
+
     def test_skip_moves_to_next_without_done_count(self, client, raw_conn):
         t1, t2 = self._setup_two_due_tasks(client, raw_conn)
 

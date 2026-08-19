@@ -223,6 +223,14 @@ button:disabled {
   color: var(--text-sub);
 }
 
+.today-item.is-tappable {
+  cursor: pointer;
+}
+
+.today-item.is-tappable:active {
+  filter: brightness(0.95);
+}
+
 .today-item.is-done .name {
   text-decoration: line-through;
   color: var(--text-sub);

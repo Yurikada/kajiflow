@@ -311,6 +311,47 @@ def api_skip(task_id: int) -> dict:
     return _record_action(task_id, "skip")
 
 
+@app.post("/api/tasks/{task_id}/defer")
+def api_defer(task_id: int) -> dict:
+    """今日のプラン内でタスクを最後尾へ回す（後回し）。
+
+    skip と違い completions に記録せず、プランからも消えない。
+    最後尾に移すだけなので、他のタスクを消化すれば必ず戻ってくる
+    （取り返しのつかない操作にしない）。レスポンスは /api/next と同形で、
+    実際に順序が変わったかを deferred で返す（残り1件なら false）。
+    """
+    with closing(get_conn()) as conn:
+        d = today_jst()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT task_ids FROM daily_plans WHERE date = ?", (d.isoformat(),)
+            ).fetchone()
+            plan: list[int] = json.loads(row["task_ids"]) if row else []
+            if task_id not in plan:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=409, detail="今日のプランにないタスクです"
+                )
+            statuses = today_statuses(conn, d)
+            pending = [t for t in plan if statuses.get(t) is None]
+            deferred = len(pending) > 1  # 残り1件なら回しても先頭のまま
+            plan = [t for t in plan if t != task_id] + [task_id]
+            conn.execute(
+                "UPDATE daily_plans SET task_ids = ? WHERE date = ?",
+                (json.dumps(plan), d.isoformat()),
+            )
+            conn.commit()
+        except HTTPException:
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+        payload = next_payload(conn)
+        payload["deferred"] = deferred
+        return payload
+
+
 @app.get("/api/today")
 def api_today() -> dict:
     with closing(get_conn()) as conn:

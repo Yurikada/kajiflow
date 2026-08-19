@@ -14,6 +14,21 @@ function formatDateJa(dateStr) {
   return `${m}月${d}日（${wd}）`;
 }
 
+async function completeFromList(task) {
+  const { ok } = await appConfirm({
+    title: `「${task.name}」を完了にしますか？`,
+    confirmLabel: "完了にする",
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/tasks/${task.id}/complete`, { method: "POST" });
+    showToast("完了にしました");
+    await load();
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
 async function load() {
   try {
     const data = await api("/api/today");
@@ -30,20 +45,27 @@ async function load() {
     }
     emptyNote.hidden = true;
 
-    list.innerHTML = data.items
-      .map(({ task, status }) => {
-        const v = STATUS_VIEW[status] || STATUS_VIEW.pending;
-        return `
-          <li class="today-item ${v.cls}">
-            <span class="status-icon">${v.icon}</span>
-            <div class="info">
-              <div class="name">${escapeHtml(task.name)}</div>
-              <div class="meta">${escapeHtml(task.category)}・約${task.est_minutes}分</div>
-            </div>
-            <span class="status-label ${v.labelCls}">${v.label}</span>
-          </li>`;
-      })
-      .join("");
+    list.innerHTML = "";
+    for (const { task, status } of data.items) {
+      const v = STATUS_VIEW[status] || STATUS_VIEW.pending;
+      const li = document.createElement("li");
+      li.className = `today-item ${v.cls}`;
+      li.innerHTML = `
+        <span class="status-icon">${v.icon}</span>
+        <div class="info">
+          <div class="name">${escapeHtml(task.name)}</div>
+          <div class="meta">${escapeHtml(task.category)}・約${task.est_minutes}分</div>
+        </div>
+        <span class="status-label ${v.labelCls}">${v.label}</span>`;
+      if (status === "pending") {
+        // pending 行はタップで完了（確認ダイアログ付き）
+        li.classList.add("is-tappable");
+        li.setAttribute("role", "button");
+        li.setAttribute("aria-label", `${task.name} を完了にする`);
+        li.addEventListener("click", () => completeFromList(task));
+      }
+      list.appendChild(li);
+    }
   } catch (e) {
     showToast(e.message);
   }
