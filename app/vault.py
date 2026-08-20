@@ -471,6 +471,33 @@ def complete_in_vault(conn: sqlite3.Connection, uid: str, note: str | None = Non
 
 # ---------------------------------------------------------------- prompt
 
+# 完了条件の客観性判定（実装系タスクの自動完了記録に使う）。
+# 客観語: 成果物の存在・状態で検証できることを示す語。
+OBJECTIVE_MARKERS = (
+    "実装", "作成", "生成", "登録", "通過", "通る", "公開", "push", "PR",
+    "コミット", "マージ", "スクリプト", "テスト", "検証", "動作", "ファイル",
+    "リポジトリ", "デモ", "完成", "存在", "デプロイ", "ビルド",
+)
+# 主観語: 本人の判断・言語化・選択が完了条件に含まれる場合は自動記録しない。
+SUBJECTIVE_MARKERS = (
+    "判断", "納得", "所有権", "本人の言葉", "自分の言葉", "選ぶ", "選定",
+    "決める", "見直す", "振り返", "語り", "評価し",
+)
+
+
+def is_objective_done_when(done_when: str) -> bool:
+    """完了条件が客観的に検証可能（実装系）かをヒューリスティックに判定する。
+
+    完了条件が空なら検証基準が無いため False。主観語を1つでも含めば False
+    （完了の所有権はユーザーに残す）。その上で客観語を含む場合のみ True。
+    """
+    if not (done_when or "").strip():
+        return False
+    if any(m in done_when for m in SUBJECTIVE_MARKERS):
+        return False
+    return any(m in done_when for m in OBJECTIVE_MARKERS)
+
+
 def build_prompt(task: dict) -> str:
     """AI タスクをそのままエージェントに渡せる text/plain の指示文を作る。"""
     meta = json.loads(task.get("meta_json") or "{}")
@@ -489,4 +516,21 @@ def build_prompt(task: dict) -> str:
             lines.append(f"{label}: {value}")
     lines.append("")
     lines.append("完了条件を満たしたら、結果と生成物の場所を報告してください。")
+    if task.get("is_handoff"):
+        # ハンドオフチケットの完了遷移は agent_handoff.py が唯一の正規経路
+        lines.append(
+            "完了遷移はハンドオフ運用に従い、"
+            f"`{handoff_complete_command(task['uid'])} --agent <自分>` で行ってください。"
+        )
+    elif is_objective_done_when(task.get("done_when", "")):
+        # 実装系（完了条件が客観的）のみ、完了記録まで自動で行わせる。
+        # 主観的な完了条件のタスクは報告止まりとし、記録はユーザーが行う。
+        lines.append(
+            "このタスクの完了条件は客観的に検証可能です。満たしたことを確認したら、"
+            "KajiFlow API で完了を記録してください（Vault 正本に書き戻されます）:"
+        )
+        lines.append(
+            f"  POST http://localhost:8340/api/vault/tasks/{task['uid']}/complete "
+            '（JSON ボディ {"note": "結果の一言"} は任意）'
+        )
     return "\n".join(lines) + "\n"

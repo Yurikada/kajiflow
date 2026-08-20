@@ -600,7 +600,9 @@ class TestVaultApi:
         res = client.get(f"/api/vault/tasks/{uid}/prompt")
         assert res.status_code == 200
         assert res.headers["content-type"].startswith("text/plain")
-        assert res.text == (
+        # 完了条件「submission.csv が生成される」は客観的（実装系）なので
+        # 自動完了記録の指示が付く
+        assert res.text.startswith(
             "次のタスクを実行してください。\n"
             "\n"
             "タスク: kaggleコンペのベースライン実装\n"
@@ -611,6 +613,36 @@ class TestVaultApi:
             "\n"
             "完了条件を満たしたら、結果と生成物の場所を報告してください。\n"
         )
+        assert f"/api/vault/tasks/{uid}/complete" in res.text
+
+    def test_prompt_subjective_done_when_has_no_auto_record(self, vault_file, client):
+        """主観的な完了条件（本人の言葉など）は報告のみで自動記録指示を付けない。"""
+        md = (
+            "# タスク\n\n"
+            "- [ ] キャリアの語り直し\n"
+            "  - 目的: 自己理解\n"
+            "  - 完了条件: 本人の言葉で語り直しの文章がある\n"
+        )
+        self._sync(client, vault_file, md)
+        uid = vault.title_uid("キャリアの語り直し")
+        text = client.get(f"/api/vault/tasks/{uid}/prompt").text
+        assert "/complete" not in text
+        assert "報告してください" in text
+
+    def test_prompt_empty_done_when_has_no_auto_record(self, vault_file, client):
+        md = "# タスク\n\n- [ ] ふわっとしたタスク\n  - 目的: なんとなく\n"
+        self._sync(client, vault_file, md)
+        uid = vault.title_uid("ふわっとしたタスク")
+        text = client.get(f"/api/vault/tasks/{uid}/prompt").text
+        assert "/complete" not in text
+
+    def test_is_objective_done_when(self):
+        assert vault.is_objective_done_when("pytest が通過し、リポジトリに push されている")
+        assert vault.is_objective_done_when("スクリプトが作成され動作する")
+        assert not vault.is_objective_done_when("")
+        assert not vault.is_objective_done_when("納得できる状態になっている")
+        # 客観語と主観語が混在 → 主観優先で False（所有権はユーザーに残す）
+        assert not vault.is_objective_done_when("実装したうえで本人の言葉で説明できる")
 
     def test_prompt_unknown_uid_returns_404(self, vault_file, client):
         self._sync(client, vault_file)
