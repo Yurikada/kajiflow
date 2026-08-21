@@ -41,6 +41,7 @@ kajiflow/
     obsidian_weekly.py  # 週次サマリを Vault の 00_Inbox に書き出し
     run_server.ps1      # uvicorn 起動（0.0.0.0:8340）
     register_tasks.ps1  # Windows タスクスケジューラ登録（通知・週次）
+    bg_run.py           # コンソール非表示ランチャ（タスクスケジューラ用）
   tests/
     test_engine.py
     test_api.py
@@ -131,7 +132,8 @@ seed はテンプレ定義のみで、初期 DB へ自動投入はしない（ma
 - `notify_digest.py`: API（localhost:8340）から /api/today を取得し、ntfy_topic 設定があれば `{ntfy_server}/{topic}` へ日本語ダイジェスト（「今日の家事 3件・約35分: 風呂掃除, 掃除機, …」）を POST。プラン未生成なら regenerate を先に叩く。API 不達時は exit 0 で静かに終了（PC 未起動時の Task Scheduler エラー蓄積を避ける）。
 - `obsidian_weekly.py`: /api/stats/weekly を取得し、`%USERPROFILE%\OneDrive\ドキュメント\KnowledgeBase\00_Inbox\家事週次サマリ.md` に週次セクションを追記（既存同週セクションがあれば置換）。
 - `run_server.ps1`: `.venv` の uvicorn で `app.main:app` を `0.0.0.0:8340` で起動。
-- `register_tasks.ps1`: Task Scheduler に「毎朝 7:30 notify_digest」「毎週日曜 21:00 obsidian_weekly」を登録（`Register-ScheduledTask`）。実行は登録のみで、ユーザーが明示実行する前提。
+- `register_tasks.ps1`: Task Scheduler に「毎朝 7:30 notify_digest」「毎週日曜 21:00 obsidian_weekly」を登録（`Register-ScheduledTask`）。実行は登録のみで、ユーザーが明示実行する前提。タスクのアクションは必ず `pythonw.exe scripts\bg_run.py ...` の形にする。常駐する `KajiFlow_Server` のみ `ExecutionTimeLimit` を `PT0S`（無制限）にする（既定の 72 時間のままだと PC をつけっぱなしにして 3 日でサーバが停止させられる）。
+- `bg_run.py`: タスクスケジューラ用のコンソール非表示ランチャ。`pythonw.exe` から起動され、`--log` で指定したファイル（相対パスはリポジトリルート基準・5MB で1世代退避）へ標準出力／標準エラーを差し替えたうえで `--script <path>` または `--module <mod> <args...>` を実行する。python.exe や cmd.exe をタスクのアクションに直接指定すると、対話セッションで実行されるためコンソールウィンドウが開き（常駐サーバでは出っぱなし、定期同期では実行のたびに最前面へ来てフォーカスを奪う）。
 
 ## テスト（pytest）
 
