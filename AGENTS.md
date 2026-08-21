@@ -48,3 +48,21 @@ codex / claude などのエージェントは **kajiflow REST API と Vault 経�
 - CLI: `.venv\Scripts\python.exe scripts\gtasks_sync.py`（API 経由の薄いラッパ。API 不達は exit 0）。
 - 定期実行: `scripts/register_tasks.ps1` が登録する `KajiFlow_GTasksSync`（30分ごと）。
 - UI: 管理画面（/manage.html）の「Google Tasks 連携」カードの「今すぐ同期」。
+
+<!-- BEGIN KNOWLEDGEBASE AGENT BRIDGE (managed) -->
+# KnowledgeBase project bridge
+
+- Tool: Codex
+- Resolve the KnowledgeBase at `%USERPROFILE%\OneDrive\ドキュメント\KnowledgeBase`, verified by the six Vault markers.
+- Resolve the Projects root at `%USERPROFILE%\dev\Projects`; code must remain outside OneDrive.
+- Workspace relative to Projects root: `kajiflow`
+- Expected resolved workspace: `%USERPROFILE%\dev\Projects\kajiflow`
+- Before inspecting project files, resolve the current working directory and confirm it is this expected workspace or its descendant.
+- If the current path is under OneDrive Projects, points at a same-named stale folder, or differs from the expected workspace, stop with `WRONG_WORKSPACE`. Do not report files as deleted and do not perform a broad search until the path mismatch is reported.
+- Canonical project context relative to the resolved Vault: `90_Projects/kajiflow/agent_context.md`
+- Before substantial project work, read the canonical project context and the shared bootstrap memory.
+- Keep code, tests, Git state, and generated artifacts in this workspace.
+- Write durable decisions, failed approaches, current state, and next actions back to the canonical project context.
+- Do not copy secrets, private datasets, credentials, or verbose reasoning into the Vault.
+- If the KnowledgeBase is not accessible, report the missing additional-directory permission instead of treating auto-memory as canonical.
+<!-- END KNOWLEDGEBASE AGENT BRIDGE (managed) -->
