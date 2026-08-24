@@ -40,8 +40,16 @@ class ItemAmbiguityError(Exception):
         )
 
 
-def _has_control_chars(value: str) -> bool:
-    return any(ch in "\r\n\t" or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+def _is_forbidden_char(ch: str) -> bool:
+    """改行・制御・不可視文字の Unicode-aware 判定。
+
+    ASCII の列挙では U+0085 / U+2028 / U+2029 等の Unicode 改行が素通りし、
+    JSON カタログ行を物理的に改行できる（Codex 再レビュー P2）。
+    str.isprintable() は Other（Cc/Cf など）と ASCII 空白以外の Separator
+    （Zl/Zp/Zs）を非表示とみなすので、これを基準にし、日本語で正当な
+    全角空白 U+3000 だけ許可する。
+    """
+    return not ch.isprintable() and ch != " " and ch != "　"
 
 
 def clean_name(value: str) -> str:
@@ -49,23 +57,25 @@ def clean_name(value: str) -> str:
 
     レシート画像由来の文字列は未信頼入力で、品目名は次回の解析指示文へ
     再流入する（Codex レビュー P2）。命令文の混入経路にしないため、
-    黙って直さずエラーで解析者へ返す。
+    黙って直さずエラーで解析者へ返す。検証は strip より先に行い、
+    端にある改行も黙って除去せず拒否する。
     """
+    if any(_is_forbidden_char(ch) for ch in value):
+        raise ValueError("item_name に改行・制御文字は使えません: {!r}".format(value))
     value = value.strip()
     if not value:
         raise ValueError("item_name を入力してください")
-    if _has_control_chars(value):
-        raise ValueError("item_name に改行・制御文字は使えません: {!r}".format(value))
     if len(value) > MAX_NAME_LEN:
         raise ValueError("item_name が長すぎます（{}文字まで）".format(MAX_NAME_LEN))
     return value
 
 
 def sanitize_text(value: str, max_len: int) -> str:
-    """store / raw_label 用。レシートの生文字列なので拒否せず、制御文字除去と切り詰めに留める。"""
-    cleaned = "".join(
-        ch for ch in value if not (ch in "\r\n\t" or ord(ch) < 0x20 or ord(ch) == 0x7F)
-    ).strip()
+    """store / raw_label 用。レシートの生文字列なので拒否せず、除去と切り詰めに留める。
+
+    除去の文字判定は clean_name と同じ _is_forbidden_char を共有する。
+    """
+    cleaned = "".join(ch for ch in value if not _is_forbidden_char(ch)).strip()
     return cleaned[:max_len]
 
 # 受け入れる画像タイプ。拡張子は保存ファイル名に使う
@@ -249,11 +259,14 @@ def managed_image_path(image_path: str) -> Path | None:
     レビュー P2 で実測）。resolve で正規化してから判定し、配下外・解決不能は
     None（呼び出し側は「画像なし」として扱い、読みも消しもしない）。
     """
+    # SQLite は TEXT 列にも BLOB 等を格納できる。異常値は「画像なし」へ畳む
+    if not isinstance(image_path, str):
+        return None
     try:
         base = receipts_dir().resolve()
         candidate = Path(image_path).resolve()
         return candidate if candidate.is_relative_to(base) else None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError, TypeError):
         return None
 
 
@@ -291,6 +304,14 @@ def save_receipt_image(
     conn.commit()
     created = cur.rowcount == 1
     row = conn.execute("SELECT * FROM receipts WHERE sha256 = ?", (sha,)).fetchone()
+    if not created and row["image_path"] != str(path):
+        # 同じ画像を別の Content-Type で送ると拡張子違いのファイルを書いてから
+        # 競合に気づく。DB から参照されない孤児を残さない（Codex 再レビュー P3）。
+        # 既存行と同じパスなら同時アップロードの共有ファイルなので触らない。
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
     return receipt_to_dict(row), created
 
 

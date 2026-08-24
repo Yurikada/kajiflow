@@ -938,8 +938,13 @@ def api_items_update(item_id: int, payload: ItemUpdate) -> dict:
             status_code=422,
             detail="category は 食材 / 日用品 / 消耗品 / その他 を指定してください",
         )
-    if "name" in updates and not str(updates["name"]).strip():
-        raise HTTPException(status_code=422, detail="品目名を入力してください")
+    if "name" in updates:
+        # parse / 手入力と同じ検証を通す。ここだけ素通しだと、正規の編集 API が
+        # 改行入り品目名を DB と将来の解析指示文へ入れる迂回路になる
+        try:
+            updates["name"] = pantry.clean_name(str(updates["name"] or ""))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
     with closing(get_conn()) as conn:
         row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         if row is None:
