@@ -823,11 +823,18 @@ async def api_receipts_upload(request: Request) -> JSONResponse:
             status_code=415,
             detail="画像（JPEG/PNG/WebP/HEIC）を Content-Type 付きで送ってください",
         )
-    data = await request.body()
+    # 上限判定の前に全量をメモリへ載せない（Codex レビュー P3）。
+    # チャンクを読みながら超過した時点で 413 にする。
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > pantry.MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="画像が大きすぎます（10MBまで）")
+        chunks.append(chunk)
+    data = b"".join(chunks)
     if not data:
         raise HTTPException(status_code=422, detail="画像が空です")
-    if len(data) > pantry.MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=413, detail="画像が大きすぎます（10MBまで）")
     with closing(get_conn()) as conn:
         receipt, created = pantry.save_receipt_image(
             conn, data, content_type, now_jst().isoformat()
@@ -869,8 +876,10 @@ def api_receipts_prompt(request: Request) -> PlainTextResponse:
 def api_receipts_image(receipt_id: int) -> FileResponse:
     with closing(get_conn()) as conn:
         receipt = _fetch_receipt(conn, receipt_id)
-    path = Path(receipt["image_path"])
-    if not path.is_file():
+    # DB 行が保存先の外を指していても配信しない（正規化後に配下判定。
+    # DB の移設ミス・手動補正が任意ファイルの開示に変わるのを防ぐ）
+    path = pantry.managed_image_path(receipt["image_path"])
+    if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="画像ファイルがありません")
     return FileResponse(str(path))
 
@@ -883,11 +892,16 @@ def api_receipts_parse(receipt_id: int, payload: ReceiptParse) -> dict:
                 status_code=422,
                 detail="category は 食材 / 日用品 / 消耗品 / その他 を指定してください",
             )
-        if not line.item_name.strip():
-            raise HTTPException(status_code=422, detail="item_name を入力してください")
+        try:
+            pantry.clean_name(line.item_name)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
     with closing(get_conn()) as conn:
         receipt = _fetch_receipt(conn, receipt_id)
-        return pantry.apply_parse(conn, receipt, payload.model_dump(), now_jst().isoformat())
+        try:
+            return pantry.apply_parse(conn, receipt, payload.model_dump(), now_jst().isoformat())
+        except pantry.ItemAmbiguityError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
 
 @app.post("/api/receipts/{receipt_id}/fail")
@@ -966,13 +980,18 @@ def api_purchases_create(payload: PurchaseCreate) -> dict:
             status_code=422,
             detail="category は 食材 / 日用品 / 消耗品 / その他 を指定してください",
         )
-    if not payload.item_name.strip():
-        raise HTTPException(status_code=422, detail="品目名を入力してください")
+    try:
+        pantry.clean_name(payload.item_name)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     with closing(get_conn()) as conn:
         now_iso = now_jst().isoformat()
-        item_id = pantry.upsert_item(
-            conn, payload.item_name, payload.category, raw_label="", now_iso=now_iso
-        )
+        try:
+            item_id = pantry.upsert_item(
+                conn, payload.item_name, payload.category, raw_label="", now_iso=now_iso
+            )
+        except pantry.ItemAmbiguityError as e:
+            raise HTTPException(status_code=422, detail=str(e))
         cur = conn.execute(
             """
             INSERT INTO purchases
