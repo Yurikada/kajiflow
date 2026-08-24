@@ -563,6 +563,64 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+/* 買い物画面（shopping.html） */
+.upload-btn {
+  display: block;
+  text-align: center;
+  padding: 12px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+#upload-note {
+  margin: 8px 0 0;
+  color: var(--text-sub);
+  text-align: center;
+}
+
+.receipt-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.receipt-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.receipt-main { flex: 1; min-width: 0; }
+
+.receipt-actions { flex-shrink: 0; }
+
+.purchase-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.purchase-form input[type="text"] { grid-column: 1 / -1; }
+
+.purchase-form input,
+.purchase-form select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.95rem;
+}
+
+.purchase-form button { grid-column: 1 / -1; }
+
 /* Google Tasks 連携カード（manage.html） */
 .gt-line {
   margin: 0 0 8px;

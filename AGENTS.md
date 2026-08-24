@@ -35,6 +35,23 @@ codex / claude などのエージェントは **kajiflow REST API と Vault 経�
 | `GET /api/vault/tasks/{uid}/prompt` | AI 向け指示文（text/plain） |
 | `POST /api/gtasks/sync` | Google Tasks 全体同期（未認証は 503） |
 | `GET /api/gtasks/status` | 認証状態・最終同期時刻・前回結果 |
+| `POST /api/receipts/upload` | レシート画像の受領（body は画像バイト列。sha256 冪等） |
+| `GET /api/receipts?status=pending` | レシート一覧 / 解析キュー取得 |
+| `GET /api/receipts/pending/prompt` | レシート解析のエージェント指示文（text/plain） |
+| `POST /api/receipts/{id}/parse` / `POST /api/receipts/{id}/fail` | 解析結果の書き戻し / 解析失敗の記録 |
+| `GET /api/receipts/{id}/image`・`DELETE /api/receipts/{id}` | 画像取得 / レシート削除（明細・画像ごと） |
+| `GET /api/items`・`PUT /api/items/{id}` | 品目マスタ（購入回数付き） / 名前・分類の修正 |
+| `GET/POST /api/purchases`・`DELETE /api/purchases/{id}` | 購入記録の一覧 / 手入力 / 削除 |
+| `GET /api/shopping/list` | 「そろそろ切れる」提案（購入間隔の EWMA 推定） |
+
+### レシート解析の作法（エージェント向け）
+
+- `GET /api/receipts/pending/prompt` を取得すると、未処理レシートの画像パス・書き戻し API の
+  仕様・既存品目カタログが揃った指示文が返る。**まずこれを読む**。
+- 画像はローカルパスを直接読んでよい（同一マシン前提）。品目名は既存カタログに揃え、
+  category は 食材 / 日用品 / 消耗品 / その他 のいずれかにする。
+- 読めない画像は `fail` に理由を書く。勝手に推測で品目をでっち上げない。
+- 解析の再実行は冪等（同じレシートへの `parse` は明細を置き換える）。
 
 ### Google 認証情報の規約
 

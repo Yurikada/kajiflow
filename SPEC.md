@@ -299,6 +299,123 @@ Google API はネットワークを一切叩かない。`app/gtasks.py` は Task
 
 フェイクのカレンダーイベントで: 当日該当日のみプラン注入・先頭配置、gomi_events 洗い替えの冪等性、weekly/interval との並び順、calendar タスクの API 422、カレンダー取得失敗時の warnings 継続、re-auth 必要時の warnings。
 
+## 購買記録・買い物リスト（v5）
+
+食材・日用品・消耗品の購入をレシート写真から記録し、購入間隔の実績から「そろそろ切れる」を提案する。
+在庫数の手動更新は求めない（判断レス・サボり耐性: 更新をサボっても数字が嘘にならない設計。
+家事の adaptive 学習と同じく、実績ベースの推定だけを使う）。
+
+### レシート解析の方式（エージェント解析キュー）
+
+OCR・外部 API を使わない。**kajiflow は画像を預かりキューに積むだけ**で、構造化は
+Claude Code 等のエージェントが画像を読んで REST API で書き戻す。
+
+1. PWA から写真をアップロード → `data/receipts/` に保存、`receipts` 行を status='pending' で作成。
+2. エージェントが `GET /api/receipts?status=pending` でキューを取得し、`image_path` の画像を読んで
+   品目・金額を構造化、`POST /api/receipts/{id}/parse` で書き戻す（status='parsed'）。
+3. 読めない画像は `POST /api/receipts/{id}/fail`（status='failed'、note に理由）。UI は失敗を事実として
+   表示し、手入力（POST /api/purchases）で補える。
+
+即時性はエージェント起動時のみだが、外部送信ゼロ・追加コストゼロ・認証情報の追加保持なしを優先する。
+`GET /api/receipts/pending/prompt` が「未処理レシート一覧 + 既存品目カタログ + 書き戻し API 仕様」を
+text/plain で返し、エージェントへそのまま渡せる（vault の /prompt と同じ流儀）。
+
+### データモデル追加
+
+```sql
+items(
+  id INTEGER PK,
+  name TEXT NOT NULL UNIQUE,          -- 正規化名（例: 食器用洗剤）。エージェントが正規化の主体
+  category TEXT NOT NULL DEFAULT 'その他',  -- '食材' | '日用品' | '消耗品' | 'その他'
+  aliases TEXT NOT NULL DEFAULT '[]', -- JSON配列。レシート表記ゆれ（例: "ｷｭｷｭｯﾄ ﾎﾟﾝﾌﾟ"）
+  enabled INTEGER NOT NULL DEFAULT 1,
+  notes TEXT DEFAULT '',
+  created_at TEXT NOT NULL
+)
+receipts(
+  id INTEGER PK,
+  sha256 TEXT NOT NULL UNIQUE,        -- 画像の冪等キー。同一画像の再アップは既存行を返す
+  image_path TEXT NOT NULL,           -- DB と同じディレクトリ配下 receipts/ の相対でなく絶対パス
+  store TEXT DEFAULT '',
+  purchased_at TEXT,                  -- レシート記載の日時（解析後に入る）
+  total_jpy REAL,
+  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'parsed' | 'failed'
+  parsed_at TEXT, parsed_by TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  uploaded_at TEXT NOT NULL
+)
+purchases(
+  id INTEGER PK,
+  receipt_id INTEGER REFERENCES receipts(id) ON DELETE CASCADE,  -- NULL = 手入力
+  item_id INTEGER NOT NULL REFERENCES items(id),
+  raw_label TEXT NOT NULL DEFAULT '', -- レシート上の表記そのまま（手入力は空）
+  qty REAL NOT NULL DEFAULT 1,
+  amount_jpy REAL NOT NULL,           -- 行合計（値引き後）。qty×単価の再計算はしない
+  purchased_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+)
+```
+
+### 解析書き戻し（POST /api/receipts/{id}/parse）
+
+body: `{store, purchased_at, total_jpy, lines: [{raw_label, item_name, category, qty, amount_jpy}]}`
+
+- `item_name` は正規化名。既存 items と名前または alias で一致すれば再利用し、`raw_label` を
+  その品目の aliases へ追記する（次回解析の表記ゆれ辞書として育つ）。一致しなければ新規作成。
+- 明細合計と `total_jpy` の差が 1 円超なら、拒否せずレスポンスの `warnings` に日本語で載せる
+  （軽減税率・ポイント値引きで恒常的にずれるため。事実として返し、判断は読み手に残す）。
+- 再解析は冪等: 既存の同 receipt_id の purchases を削除してから挿入する（訂正のやり直しが利く）。
+- status='parsed'、parsed_at、parsed_by（body の `parsed_by`、既定 'agent'）を記録。
+
+### 買い物リスト（そろそろ切れる）
+
+- 品目ごとの購入日時（qty は使わない）から gap 列を作り、EWMA（α=0.3、直近最大5件、
+  0.5 日未満の gap は同一買い物由来として除外）で購入間隔を推定する。
+- `ratio = 経過日数 / 推定間隔` が 1.0 以上の品目を提案に載せる（ratio 降順）。
+- gap が 2 件未満（購入 3 回未満）の品目は `thin: true` を付け、UI は「目安薄い」と表示する。
+  提案から隠しはしない（隠すと育てる動機が消える）。
+- 提案は事実の提示のみ。赤字・警告色・滞納表現は使わない（設計原則2）。
+
+### API 追加
+
+- `POST /api/receipts/upload?filename=...` → body は画像バイト列そのもの（multipart 不使用。
+  依存追加を避ける）。Content-Type image/* のみ受理、10MB 上限。sha256 重複は既存行を 200 で返す。
+- `GET /api/receipts?status=pending|parsed|failed`（省略時全件、新しい順）
+- `GET /api/receipts/{id}/image` → 画像ファイル。`DELETE /api/receipts/{id}` → 行・明細・画像を削除。
+- `POST /api/receipts/{id}/parse` / `POST /api/receipts/{id}/fail` → 上記。
+- `GET /api/receipts/pending/prompt` → text/plain のエージェント指示文。
+- `GET /api/items`（購入回数・最終購入日付き） / `PUT /api/items/{id}`（name/category/enabled/notes）
+- `GET /api/purchases?months=3` / `POST /api/purchases`（手入力: item_name, amount_jpy, category,
+  qty, purchased_at 省略時 now） / `DELETE /api/purchases/{id}`
+- `GET /api/shopping/list` → `{suggestions: [{item, last_purchased_at, interval_days, ratio, thin}]}`
+
+### UI（shopping.html + shopping.js）
+
+- 下部タブに5つ目「🛒 買い物」を追加（全ページのタブバー更新、sw.js の ASSETS と CACHE_NAME 更新）。
+- 画面構成: 上から (1) レシート撮影/アップロードボタン（`<input type="file" accept="image/*"
+  capture="environment">`）、(2) 解析待ち・失敗レシートの一覧（枚数と状態。失敗は理由と削除）、
+  (3) そろそろ切れる（買い物リスト提案）、(4) 直近の購入（レシート単位で折りたたみ）+ 手入力フォーム。
+- アップロード成功時「レシートを預かりました。次のエージェント起動時に読み取ります」。
+  即時解析を約束しない文言にする。
+
+### 純ロジックの置き場所
+
+購入間隔の推定・提案は `app/pantry.py` の純関数（now 引数渡し、DB 非依存）。
+engine.py の `gaps_from_done` / EWMA と同じ流儀で、テストは DB なしで書ける。
+
+### task-economics 連携（将来・本 SPEC では実装しない）
+
+task-economics が kajiflow DB を読み取り専用で ingest する既存経路に、purchases 由来の
+消耗品費を載せる余地がある。品目→家事タスクの対応付けが本人の判断を要するため、
+ここでは purchases を貯めるところまでを責務とする。
+
+### テスト
+
+- pantry 純関数: gap 推定・EWMA・0.5日未満除外・thin 判定・ratio 順。
+- API: アップロード（冪等・型/サイズ検査）→ pending 一覧 → parse（items 育成・alias 追記・
+  再解析の冪等性・合計不一致 warnings）→ shopping/list（バックデートで ratio>=1 を作る）、
+  fail、手入力 purchases、receipts 削除で画像・明細が消えること、image の 404。
+
 ## 非スコープ（今回作らない）
 
 - 認証・マルチユーザー・家族共有

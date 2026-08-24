@@ -13,7 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "kajiflow.db"
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -84,6 +84,43 @@ CREATE TABLE IF NOT EXISTS gomi_events (
   summary TEXT,
   PRIMARY KEY (date, summary)
 );
+
+CREATE TABLE IF NOT EXISTS items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  category TEXT NOT NULL DEFAULT 'その他',
+  aliases TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  notes TEXT DEFAULT '',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS receipts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sha256 TEXT NOT NULL UNIQUE,
+  image_path TEXT NOT NULL,
+  store TEXT DEFAULT '',
+  purchased_at TEXT,
+  total_jpy REAL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  parsed_at TEXT,
+  parsed_by TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  uploaded_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS purchases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_id INTEGER REFERENCES receipts(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES items(id),
+  raw_label TEXT NOT NULL DEFAULT '',
+  qty REAL NOT NULL DEFAULT 1,
+  amount_jpy REAL NOT NULL,
+  purchased_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchases_item ON purchases(item_id, purchased_at);
 """
 
 
@@ -121,7 +158,8 @@ def migrate(conn: sqlite3.Connection) -> None:
     """user_version ベースの簡易マイグレーション。"""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
-        # v2: vault_tasks 追加 / v3: gtasks_links 追加 / v4: gomi_events 追加。
+        # v2: vault_tasks 追加 / v3: gtasks_links 追加 / v4: gomi_events 追加 /
+        # v5: items・receipts・purchases 追加（購買記録）。
         # テーブル作成自体は
         # SCHEMA_SQL の CREATE TABLE IF NOT EXISTS が既存 DB にも冪等に
         # 適用する。将来のスキーマ変更はここに version 判定で追加する

@@ -15,13 +15,13 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db as dbmod
-from . import engine, gtasks, seed, vault
+from . import engine, gtasks, pantry, seed, vault
 from .engine import JST
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -237,6 +237,41 @@ class TemplatesApply(BaseModel):
 
 class VaultClassify(BaseModel):
     classification: str | None = None
+
+
+class ReceiptLine(BaseModel):
+    raw_label: str = ""
+    item_name: str
+    category: str = "その他"
+    qty: float = 1
+    amount_jpy: float
+
+
+class ReceiptParse(BaseModel):
+    store: str = ""
+    purchased_at: str | None = None
+    total_jpy: float | None = None
+    parsed_by: str = "agent"
+    lines: list[ReceiptLine]
+
+
+class ReceiptFail(BaseModel):
+    note: str = ""
+
+
+class ItemUpdate(BaseModel):
+    name: str | None = None
+    category: str | None = None
+    enabled: int | None = None
+    notes: str | None = None
+
+
+class PurchaseCreate(BaseModel):
+    item_name: str
+    amount_jpy: float
+    category: str = "その他"
+    qty: float = 1
+    purchased_at: str | None = None
 
 
 class VaultComplete(BaseModel):
@@ -767,6 +802,214 @@ def api_gtasks_status() -> dict:
             "last_sync_at": last_sync_at,
             "last_result": last_result,
         }
+
+
+# -------------------------------------------------- 購買記録（v5）
+
+
+def _fetch_receipt(conn: sqlite3.Connection, receipt_id: int) -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM receipts WHERE id = ?", (receipt_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシートが見つかりません")
+    return row
+
+
+@app.post("/api/receipts/upload", status_code=201)
+async def api_receipts_upload(request: Request) -> JSONResponse:
+    """画像バイト列を直接受ける（multipart 不使用。依存追加を避ける）。"""
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if content_type not in pantry.IMAGE_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail="画像（JPEG/PNG/WebP/HEIC）を Content-Type 付きで送ってください",
+        )
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=422, detail="画像が空です")
+    if len(data) > pantry.MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="画像が大きすぎます（10MBまで）")
+    with closing(get_conn()) as conn:
+        receipt, created = pantry.save_receipt_image(
+            conn, data, content_type, now_jst().isoformat()
+        )
+        return JSONResponse(
+            {"receipt": receipt, "created": created},
+            status_code=201 if created else 200,
+        )
+
+
+@app.get("/api/receipts")
+def api_receipts_list(status: str | None = Query(default=None)) -> list[dict]:
+    if status is not None and status not in ("pending", "parsed", "failed"):
+        raise HTTPException(
+            status_code=422, detail="status は pending | parsed | failed を指定してください"
+        )
+    with closing(get_conn()) as conn:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM receipts WHERE status = ? ORDER BY id DESC", (status,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM receipts ORDER BY id DESC").fetchall()
+        return [pantry.receipt_to_dict(r) for r in rows]
+
+
+# 静的ルート /api/receipts/pending/prompt は動的ルート /{receipt_id}/image より
+# 先に定義する（FastAPI は定義順でマッチするため）
+@app.get("/api/receipts/pending/prompt")
+def api_receipts_prompt(request: Request) -> PlainTextResponse:
+    with closing(get_conn()) as conn:
+        return PlainTextResponse(
+            pantry.build_pending_prompt(conn, str(request.base_url)),
+            media_type="text/plain; charset=utf-8",
+        )
+
+
+@app.get("/api/receipts/{receipt_id}/image")
+def api_receipts_image(receipt_id: int) -> FileResponse:
+    with closing(get_conn()) as conn:
+        receipt = _fetch_receipt(conn, receipt_id)
+    path = Path(receipt["image_path"])
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="画像ファイルがありません")
+    return FileResponse(str(path))
+
+
+@app.post("/api/receipts/{receipt_id}/parse")
+def api_receipts_parse(receipt_id: int, payload: ReceiptParse) -> dict:
+    for line in payload.lines:
+        if line.category not in pantry.VALID_CATEGORIES:
+            raise HTTPException(
+                status_code=422,
+                detail="category は 食材 / 日用品 / 消耗品 / その他 を指定してください",
+            )
+        if not line.item_name.strip():
+            raise HTTPException(status_code=422, detail="item_name を入力してください")
+    with closing(get_conn()) as conn:
+        receipt = _fetch_receipt(conn, receipt_id)
+        return pantry.apply_parse(conn, receipt, payload.model_dump(), now_jst().isoformat())
+
+
+@app.post("/api/receipts/{receipt_id}/fail")
+def api_receipts_fail(receipt_id: int, payload: ReceiptFail) -> dict:
+    with closing(get_conn()) as conn:
+        receipt = _fetch_receipt(conn, receipt_id)
+        conn.execute(
+            "UPDATE receipts SET status = 'failed', note = ?, parsed_at = ? WHERE id = ?",
+            (payload.note, now_jst().isoformat(), receipt["id"]),
+        )
+        conn.commit()
+        return pantry.receipt_to_dict(_fetch_receipt(conn, receipt_id))
+
+
+@app.delete("/api/receipts/{receipt_id}")
+def api_receipts_delete(receipt_id: int) -> dict:
+    with closing(get_conn()) as conn:
+        receipt = _fetch_receipt(conn, receipt_id)
+        pantry.delete_receipt(conn, receipt)
+        return {"ok": True, "deleted_id": receipt_id}
+
+
+@app.get("/api/items")
+def api_items_list() -> list[dict]:
+    with closing(get_conn()) as conn:
+        return pantry.list_items(conn)
+
+
+@app.put("/api/items/{item_id}")
+def api_items_update(item_id: int, payload: ItemUpdate) -> dict:
+    updates = payload.model_dump(exclude_unset=True)
+    if "category" in updates and updates["category"] not in pantry.VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=422,
+            detail="category は 食材 / 日用品 / 消耗品 / その他 を指定してください",
+        )
+    if "name" in updates and not str(updates["name"]).strip():
+        raise HTTPException(status_code=422, detail="品目名を入力してください")
+    with closing(get_conn()) as conn:
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="品目が見つかりません")
+        if not updates:
+            return pantry.item_to_dict(row)
+        merged = {**dict(row), **updates}
+        try:
+            conn.execute(
+                "UPDATE items SET name = ?, category = ?, enabled = ?, notes = ? WHERE id = ?",
+                (
+                    str(merged["name"]).strip(),
+                    merged["category"],
+                    1 if merged["enabled"] else 0,
+                    merged["notes"] or "",
+                    item_id,
+                ),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="同名の品目が既にあります")
+        return pantry.item_to_dict(
+            conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        )
+
+
+@app.get("/api/purchases")
+def api_purchases_list(months: float = Query(default=3.0, gt=0, le=36)) -> list[dict]:
+    with closing(get_conn()) as conn:
+        since = (now_jst() - timedelta(days=months * 30.4)).isoformat()
+        return pantry.list_purchases(conn, since)
+
+
+@app.post("/api/purchases", status_code=201)
+def api_purchases_create(payload: PurchaseCreate) -> dict:
+    if payload.category not in pantry.VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=422,
+            detail="category は 食材 / 日用品 / 消耗品 / その他 を指定してください",
+        )
+    if not payload.item_name.strip():
+        raise HTTPException(status_code=422, detail="品目名を入力してください")
+    with closing(get_conn()) as conn:
+        now_iso = now_jst().isoformat()
+        item_id = pantry.upsert_item(
+            conn, payload.item_name, payload.category, raw_label="", now_iso=now_iso
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO purchases
+              (receipt_id, item_id, raw_label, qty, amount_jpy, purchased_at, created_at)
+            VALUES (NULL, ?, '', ?, ?, ?, ?)
+            """,
+            (item_id, payload.qty, payload.amount_jpy,
+             payload.purchased_at or now_iso, now_iso),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT p.id, p.receipt_id, p.item_id, i.name AS item_name, i.category,
+                   p.raw_label, p.qty, p.amount_jpy, p.purchased_at, NULL AS store
+            FROM purchases p JOIN items i ON i.id = p.item_id WHERE p.id = ?
+            """,
+            (cur.lastrowid,),
+        ).fetchone()
+        return dict(row)
+
+
+@app.delete("/api/purchases/{purchase_id}")
+def api_purchases_delete(purchase_id: int) -> dict:
+    with closing(get_conn()) as conn:
+        cur = conn.execute("DELETE FROM purchases WHERE id = ?", (purchase_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="購入記録が見つかりません")
+        return {"ok": True, "deleted_id": purchase_id}
+
+
+@app.get("/api/shopping/list")
+def api_shopping_list() -> dict:
+    with closing(get_conn()) as conn:
+        items = pantry.list_items(conn)
+        by_item = pantry.fetch_purchases_by_item(conn)
+        return {"suggestions": pantry.shopping_suggestions(items, by_item, now_jst())}
 
 
 # -------------------------------------------------- static

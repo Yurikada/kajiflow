@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f7d5d" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1e242e" media="(prefers-color-scheme: dark)">
+  <title>買い物 - KajiFlow</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%B9%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <main>
+    <div class="vault-toolbar">
+      <h1>買い物</h1>
+    </div>
+
+    <div class="card">
+      <label class="icon-btn primary upload-btn" for="receipt-file">📷 レシートを撮る / 選ぶ
+        <input type="file" id="receipt-file" accept="image/*" capture="environment" hidden>
+      </label>
+      <p class="small" id="upload-note">撮影した写真は次のエージェント起動時に読み取られます</p>
+    </div>
+
+    <h2>🧾 レシート<span class="group-count" id="count-receipts"></span></h2>
+    <div class="card">
+      <div id="list-receipts"></div>
+      <p class="empty-note small" id="empty-receipts" hidden>未処理のレシートはありません</p>
+    </div>
+
+    <h2>🛒 そろそろ切れる<span class="group-count" id="count-suggest"></span></h2>
+    <div class="card">
+      <div id="list-suggest"></div>
+      <p class="empty-note small" id="empty-suggest" hidden>いまは提案がありません（購入記録が貯まると出ます）</p>
+    </div>
+
+    <h2>📒 直近の購入</h2>
+    <div class="card">
+      <form id="purchase-form" class="purchase-form">
+        <input type="text" id="p-name" placeholder="品名（例: 食器用洗剤）" required>
+        <input type="number" id="p-amount" placeholder="金額（円）" min="0" step="1" required inputmode="numeric">
+        <select id="p-category">
+          <option value="食材">食材</option>
+          <option value="日用品">日用品</option>
+          <option value="消耗品">消耗品</option>
+          <option value="その他">その他</option>
+        </select>
+        <button type="submit" class="icon-btn">＋ 手入力で追加</button>
+      </form>
+      <div id="list-purchases"></div>
+      <p class="empty-note small" id="empty-purchases" hidden>直近3か月の購入記録はありません</p>
+    </div>
+  </main>
+
+  <nav class="tab-bar">
+    <a href="/"><span class="tab-icon">🏠</span>いま</a>
+    <a href="/today.html"><span class="tab-icon">📋</span>今日</a>
+    <a href="/vault.html"><span class="tab-icon">📥</span>タスク</a>
+    <a href="/shopping.html" class="active"><span class="tab-icon">🛒</span>買い物</a>
+    <a href="/manage.html"><span class="tab-icon">⚙️</span>管理</a>
+  </nav>
+
+  <script src="/common.js"></script>
+  <script src="/shopping.js"></script>
+</body>
+</html>
