@@ -61,13 +61,21 @@ Service Worker は静的アセットの cache-first のみで、**API レスポ�
 
 ## 動かし方
 
-```bash
+Python 3.13を使うWindows PowerShellの例です。リポジトリ直下で実行します。
+
+```powershell
 python -m venv .venv
-.venv/Scripts/pip install fastapi uvicorn pytest httpx     # Windows
-.venv/Scripts/python -m uvicorn app.main:app --host 0.0.0.0 --port 8340
+.\.venv\Scripts\python.exe -m pip install fastapi uvicorn pytest httpx tzdata
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8340
 ```
 
-ブラウザで `http://localhost:8340/` を開く。同一LAN内のスマートフォンからは `http://<PCのIP>:8340/` にアクセスし、ホーム画面に追加すると PWA として動く。
+PCのブラウザで `http://localhost:8340/` を開きます。既存の起動スクリプト
+`scripts/run_server.ps1` も既定では `127.0.0.1:8340` にバインドします。
+スマートフォンからはTailscale Serveなどのアクセス制御されたHTTPS経由で接続します。
+LAN上のHTTPアドレスではService Workerを利用できないため、PWAの利用にはHTTPSが必要です。
+
+Google Tasks・Calendar連携には別途本人によるOAuth設定が必要です。
+家事タスクの基本操作はGoogle認証なしで利用できます。
 
 DB は `data/kajiflow.db` に自動生成される（gitignore 対象）。初回はタスクが空なので、管理画面からテンプレを選んで追加する。
 
@@ -81,7 +89,7 @@ DB は `data/kajiflow.db` に自動生成される（gitignore 対象）。初�
 .venv/Scripts/python -m pytest -q
 ```
 
-**228 件（約11秒）**。エンジン側は緊急度計算、EWMA とクランプ、週次判定、予算充填、プランの決定性、スキップが学習に影響しないことを固定している。API 側は `TestClient` で next → complete → next の遷移、CRUD、テンプレ適用、再生成、統計、および v2〜v5 の各連携を検証する。テストは環境変数 `KAJIFLOW_DB` で一時ディレクトリの DB を使う。
+テスト件数と所要時間はリビジョン・実行環境で変わります。エンジン側は緊急度計算、EWMA とクランプ、週次判定、予算充填、プランの決定性、スキップが学習に影響しないことを固定している。API 側は `TestClient` で next → complete → next の遷移、CRUD、テンプレ適用、再生成、統計、および v2〜v5 の各連携を検証する。テストは環境変数 `KAJIFLOW_DB` で一時ディレクトリの DB を使う。
 
 ---
 
@@ -96,7 +104,7 @@ DB は `data/kajiflow.db` に自動生成される（gitignore 対象）。初�
 
 ## 非目標・限界
 
-- **認証を持たない。** 同一LAN内の個人利用を前提としており、インターネットへ公開する用途は想定していない。公開するなら認証・HTTPS・レート制限を別途足す必要がある。
+- **アプリ内認証を持たない。** 既定はループバック接続。スマートフォンからはアクセス制御されたHTTPS経由で使い、APIをLANやインターネットへ直接公開しない。
 - **マルチユーザーに対応しない。** 1人分のデータだけを扱う。
 - 家事テンプレは日本の一人〜二人暮らしを想定した内容で、一般解ではない。
 - レシート解析は外部エージェントによる解析キュー方式で、アプリ内に OCR・推論を持たない。
