@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db as dbmod
-from . import engine, gtasks, pantry, seed, vault
+from . import engine, gtasks, linear_sync, pantry, seed, vault
 from .engine import JST
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -802,6 +802,34 @@ def api_gtasks_status() -> dict:
             "last_sync_at": last_sync_at,
             "last_result": last_result,
         }
+
+
+@app.get("/api/linear/tasks")
+def api_linear_tasks() -> dict:
+    with closing(get_conn()) as conn:
+        return {"tasks": linear_sync.tasks(conn)}
+
+
+@app.post("/api/linear/sync")
+def api_linear_sync(payload: dict = Body(...)) -> dict:
+    if not _gtasks_sync_lock.acquire(blocking=False):
+        raise HTTPException(409, "Google Tasks同期は実行中です")
+    try:
+        with closing(get_conn()) as conn:
+            try:
+                config = linear_sync.load_config()
+                linear_sync.validate(payload, config, now_jst())
+                return linear_sync.sync(conn, gtasks.build_client(), payload, config)
+            except gtasks.GTasksAuthError as exc:
+                raise HTTPException(503, str(exc))
+            except gtasks.GTasksError as exc:
+                raise HTTPException(502, str(exc))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise HTTPException(422, str(exc))
+            except OSError:
+                raise HTTPException(503, "data/linear-config.jsonを設定してください")
+    finally:
+        _gtasks_sync_lock.release()
 
 
 # -------------------------------------------------- 購買記録（v5）

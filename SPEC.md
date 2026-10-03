@@ -268,6 +268,14 @@ Google API はネットワークを一切叩かない。`app/gtasks.py` は Task
 - codex / claude からの操作面: kajiflow REST API（/api/vault/tasks で分類・指示文取得、/api/gtasks/sync で同期発火）。Google 認証情報はエージェントに渡さない。
 - kajiflow/CLAUDE.md と AGENTS.md に API 一覧と「Google Tasks へ直接アクセスしない」規約を追記する。
 
+## Linearプロジェクト同期（2026-09-26追加）
+
+`POST /api/linear/sync` はagentvizが公式MCPから完全取得した15分以内のスナップショットを受け、設定済みworkspace/project範囲を照合する。既存Google同期と同一ロックで直列化する。Google認証の保持者は引き続きKajiFlow。
+
+専用リスト「Linear — Yurikada Projects」の未完了タスクをUUIDで対応付ける。タイトル・期限・説明・先行タスク・状態の正本はLinear。Google完了は `linear_mirrors.completion_requested` へ記録し、Linearを自動でDoneにしない。Linear完了/取消は連携済みGoogle項目を完了表示にし、再開は未完了表示に戻す。履歴上の完了タスクは初回作成しない。取得対象から消えた項目を自動削除しない。家事プラン・Vaultノート・既存2リストとは分離する。
+
+`GET /api/linear/tasks` は写しと完了申告・last_seenを返す。設定は `data/linear-config.json`。CLIと定期実行手順はagent-vizの `docs/linear-tasks-sync.md`。新規/変更件数・警告・完了申告を同期結果として返す。
+
 ## ゴミカレンダー連動（v4）
 
 ユーザーの Google カレンダー「ゴミカレンダー」を正本として、収集日当日の日次プランへ「ゴミ出し: {種別}」タスクを自動注入する。収集パターンは隔週・月1が混在し weekly では表現できないため、カレンダーのイベントそのものに追従する。
